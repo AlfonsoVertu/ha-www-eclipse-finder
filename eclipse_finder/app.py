@@ -179,7 +179,7 @@ model-viewer{--poster-color:transparent}
     <span><span class="dot" style="background:var(--d-est)"></span>est</span>
     <span><span class="dot" style="background:var(--d-main)"></span>princ</span>
   </div>
-  <div class="row" style="margin:4px 0"><span class="mut">🧱 Altezza piano (3D):</span><input id="floorH" type="number" min="80" max="600" onchange="setFloorHeight(this.value)" style="width:90px"><span class="mut">unità del piano · usata come altezza muri di default</span></div>
+  <div class="row" style="margin:4px 0"><span class="mut">🧱 Altezza piano (3D):</span><input id="floorH" type="number" min="80" max="600" onchange="setFloorHeight(this.value)" style="width:80px"><button class="sec" onclick="autoStackLevels()">⭘ Impila livelli</button><span class="mut">imposta la quota Z delle stanze impilate (soppalchi/piani)</span></div>
   <div id="roomPicker" class="row" style="display:none;margin:6px 0">
     <span class="mut">Tipo stanza:</span>
     <button class="sec" onclick="pickRoom('interna')">🏠 interna</button>
@@ -209,6 +209,7 @@ model-viewer{--poster-color:transparent}
   </div>
   <div id="planwrap"><svg id="plan" width="100%" viewBox="0 0 1000 640" style="display:block"></svg></div>
   <div id="sel" class="mut" style="margin-top:8px">Tocca una stanza per selezionarla. Trascina per spostare, maniglia ◢ per ridimensionare. Stanze disegnate: trascina i vertici ◆. Usa ✏️ Disegna per forme non rettangolari.</div>
+  <div id="collWarn" style="margin-top:4px"></div>
 </div>
 
 <div id="roomPanel"></div>
@@ -342,7 +343,27 @@ function eclArrow(){ // freccia direzione eclissi dal centro
    <circle cx="${x}" cy="${y}" r="12" fill="${e.body=='sun'?'#ffd24a':'#cfd8e3'}" stroke="#f0a500"/>
    <text x="${x}" y="${y-18}" fill="var(--acc)" font-size="16" text-anchor="middle">🌒 ${e.compass}</text>`;
 }
+// ---- geometria per collisioni / livelli ----
+function pinp(pt,poly){let inside=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){const xi=poly[i][0],yi=poly[i][1],xj=poly[j][0],yj=poly[j][1];if(((yi>pt[1])!==(yj>pt[1]))&&(pt[0]<(xj-xi)*(pt[1]-yi)/(yj-yi)+xi))inside=!inside}return inside}
+function segInt(a,b,c,d){const o=(p,q,r)=>(q[1]-p[1])*(r[0]-q[0])-(q[0]-p[0])*(r[1]-q[1]);const d1=o(c,d,a),d2=o(c,d,b),d3=o(a,b,c),d4=o(a,b,d);return ((d1>0)!==(d2>0))&&((d3>0)!==(d4>0));}
+function polyInt(A,B){for(const p of A)if(pinp(p,B))return true;for(const p of B)if(pinp(p,A))return true;for(let i=0;i<A.length;i++){const a=A[i],b=A[(i+1)%A.length];for(let j=0;j<B.length;j++){const c=B[j],e=B[(j+1)%B.length];if(segInt(a,b,c,e))return true}}return false;}
+function polyContains(A,B){return B.every(p=>pinp(p,A));}
+function polyArea(P){let s=0;for(let i=0;i<P.length;i++){const a=P[i],b=P[(i+1)%P.length];s+=a[0]*b[1]-b[0]*a[1]}return Math.abs(s)/2;}
+function roomZ(r){const base=r.base||0;return [base, base+(r.height!=null?r.height:(PLAN.floorHeight||250))];}
+function zOverlap(a,b){return a[0]<b[1]-1 && b[0]<a[1]-1;}
+function furnCorners(f){const a=(f.rot||0)*Math.PI/180,ca=Math.cos(a),sa=Math.sin(a),hw=f.w/2,hh=f.h/2;return [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]].map(([x,y])=>[f.x+x*ca-y*sa, f.y+x*sa+y*ca]);}
+function satOverlap(P,Q){for(const poly of [P,Q]){for(let i=0;i<poly.length;i++){const a=poly[i],b=poly[(i+1)%poly.length];const nx=-(b[1]-a[1]),ny=b[0]-a[0];let mnP=1e9,mxP=-1e9,mnQ=1e9,mxQ=-1e9;for(const p of P){const d=p[0]*nx+p[1]*ny;if(d<mnP)mnP=d;if(d>mxP)mxP=d}for(const q of Q){const d=q[0]*nx+q[1]*ny;if(d<mnQ)mnQ=d;if(d>mxQ)mxQ=d}if(mxP<mnQ||mxQ<mnP)return false;}}return true;}
+function roomOfFurn(f){for(let i=PLAN.rooms.length-1;i>=0;i--){if(pointInRoom(PLAN.rooms[i],{x:f.x,y:f.y}))return PLAN.rooms[i]}return null;}
+let COLL={rooms:new Set(),furn:new Set()};
+function recomputeCollisions(){const rs=new Set(),fs=new Set();const rooms=PLAN.rooms||[];
+  for(let i=0;i<rooms.length;i++)for(let j=i+1;j<rooms.length;j++){if(zOverlap(roomZ(rooms[i]),roomZ(rooms[j]))&&polyInt(roomPts(rooms[i]),roomPts(rooms[j]))){rs.add(rooms[i].id);rs.add(rooms[j].id)}}
+  const furn=PLAN.furniture||[];const info=furn.map(f=>{const rm=roomOfFurn(f);return {f,c:furnCorners(f),base:rm?(rm.base||0):0,room:rm};});
+  for(const it of info){if(it.room){const poly=roomPts(it.room);if(!it.c.every(p=>pinp(p,poly)))fs.add(it.f.id);}}
+  for(let i=0;i<info.length;i++)for(let j=i+1;j<info.length;j++){if(Math.abs(info[i].base-info[j].base)<1&&satOverlap(info[i].c,info[j].c)){fs.add(info[i].f.id);fs.add(info[j].f.id)}}
+  COLL={rooms:rs,furn:fs};
+}
 function render(){
+  recomputeCollisions();
   let s=`<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#f0a500"/></marker></defs>`;
   // griglia
   for(let i=0;i<=1000;i+=50)s+=`<line x1="${i}" y1="0" x2="${i}" y2="640" stroke="#161b22"/>`;
@@ -351,14 +372,14 @@ function render(){
   s+=`<g transform="translate(60,60)"><circle r="34" fill="none" stroke="#30363d"/><line x1="0" y1="0" x2="0" y2="-30" stroke="var(--acc)" stroke-width="2" marker-end="url(#arrow)"/><text x="0" y="-38" fill="var(--acc)" font-size="14" text-anchor="middle">N</text></g>`;
   // stanze
   for(const r of PLAN.rooms){
-    const selcol=r.id===SEL?'var(--acc)':'#3b4552';const ext=isExt(r);
-    const fill=ext?'rgba(63,185,80,.09)':'rgba(88,166,255,.08)';
-    const dash=ext?' stroke-dasharray="8 5"':'';const b=roomBBox(r);const sw=r.id===SEL?3:1.5;
+    const coll=COLL.rooms.has(r.id);const selcol=coll?'var(--bad)':(r.id===SEL?'var(--acc)':'#3b4552');const ext=isExt(r);
+    const fill=coll?'rgba(248,81,73,.10)':(ext?'rgba(63,185,80,.09)':'rgba(88,166,255,.08)');
+    const dash=ext?' stroke-dasharray="8 5"':'';const b=roomBBox(r);const sw=(r.id===SEL||coll)?3:1.5;
     s+=`<g data-room="${r.id}">`;
     if(r.poly&&r.poly.length>=3){const pts=r.poly.map(p=>p[0]+','+p[1]).join(' ');
       s+=`<polygon points="${pts}" fill="${fill}" stroke="${selcol}" stroke-width="${sw}"${dash}/>`;}
     else s+=`<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="6" fill="${fill}" stroke="${selcol}" stroke-width="${sw}"${dash}/>`;
-    s+=`<text x="${b.x+8}" y="${b.y+20}" fill="var(--fg)" font-size="15" font-weight="700">${roomEmo(r)} ${escapeHtml(r.name||'Stanza')}</text>`;
+    s+=`<text x="${b.x+8}" y="${b.y+20}" fill="var(--fg)" font-size="15" font-weight="700">${roomEmo(r)} ${escapeHtml(r.name||'Stanza')}${r.base?(' <tspan fill="var(--mut)" font-size="12">Z'+r.base+'</tspan>'):''}</text>`;
     // porte
     for(const d of (r.doors||[])) s+=`<rect x="${d.x-7}" y="${d.y-7}" width="14" height="14" rx="3" fill="${DCOL[d.type]||'#888'}" stroke="#0b0f14"/>`;
     // finestre / punti di osservazione (marker + freccia azimut)
@@ -378,7 +399,7 @@ function render(){
     s+=`</g>`;
   }
   // mobili
-  for(const f of (PLAN.furniture||[])){const sel=f.id===SELF;const stroke=sel?'var(--acc)':'#8b949e';
+  for(const f of (PLAN.furniture||[])){const sel=f.id===SELF;const stroke=COLL.furn.has(f.id)?'var(--bad)':(sel?'var(--acc)':'#8b949e');
     s+=`<g transform="rotate(${f.rot||0} ${f.x} ${f.y})">
       <rect x="${f.x-f.w/2}" y="${f.y-f.h/2}" width="${f.w}" height="${f.h}" rx="4" fill="rgba(139,148,158,.20)" stroke="${stroke}" stroke-width="${sel?2.5:1.5}"/>
       <text x="${f.x}" y="${f.y}" fill="var(--fg)" font-size="12" text-anchor="middle" dominant-baseline="middle">${escapeHtml(f.name||'')}</text>`;
@@ -394,6 +415,8 @@ function render(){
     for(const v of DRAWPTS)s+=`<circle cx="${v[0]}" cy="${v[1]}" r="5" fill="var(--acc)"/>`;}
   s+=eclArrow();
   SVG.innerHTML=s;
+  const cw=$('#collWarn');if(cw){const nr=COLL.rooms.size,nf=COLL.furn.size;
+    cw.innerHTML=(nr||nf)?('<span class="badge bad">⚠️ '+(nr?nr+' stanze sovrapposte (stesso livello) ':'')+(nf?(nr?'· ':'')+nf+' mobili fuori dai muri / compenetrati':'')+'</span>'):'';}
   renderRoomPanel();renderFurnPanel();
 }
 function clampFurn(f){f.x=Math.max(0,Math.min(1000,Math.round(f.x)));f.y=Math.max(0,Math.min(640,Math.round(f.y)));}
@@ -529,6 +552,21 @@ window.setFloorHeight=(v)=>{let n=parseInt(v);if(isNaN(n))return;PLAN.floorHeigh
 window.setRoomHeight=(id,v)=>{const r=PLAN.rooms.find(x=>x.id===id);if(!r)return;
   let n=parseInt(v);if(v===''||isNaN(n)){delete r.height;}else{r.height=Math.max(40,n);}
   savePlan();render();if(H3.run)buildHouse3D();};
+window.setRoomBase=(id,v)=>{const r=PLAN.rooms.find(x=>x.id===id);if(!r)return;
+  let n=parseInt(v);if(v===''||isNaN(n)||n===0){delete r.base;}else{r.base=Math.max(0,n);}
+  savePlan();render();if(H3.run)buildHouse3D();};
+function autoStackLevels(){const rooms=(PLAN.rooms||[]).slice().sort((a,b)=>polyArea(roomPts(b))-polyArea(roomPts(a)));
+  let changed=0;
+  for(const s of rooms){ // trova la stanza più piccola che contiene 's' e stagli sopra
+    let host=null,hostArea=1e18;
+    for(const L of rooms){if(L===s)continue;const aL=polyArea(roomPts(L)),aS=polyArea(roomPts(s));if(aL<=aS)continue;
+      if(polyContains(roomPts(L),roomPts(s))&&aL<hostArea){host=L;hostArea=aL;}}
+    const nb=host?((host.base||0)+(host.height!=null?host.height:(PLAN.floorHeight||250))):0;
+    const cur=s.base||0;if(nb!==cur){if(nb===0)delete s.base;else s.base=nb;changed++;}
+  }
+  savePlan();render();if(H3.run)buildHouse3D();
+  alert(changed?('Livelli impilati: '+changed+' stanze riposizionate in Z.'):'Nessuna stanza da impilare (nessun perimetro contenuto in un altro).');
+}
 
 function renderRoomPanel(){
   const box=$('#roomPanel');const r=PLAN.rooms.find(x=>x.id===SEL);
@@ -551,7 +589,8 @@ function renderRoomPanel(){
       <button class="sec" onclick="delRoom('${r.id}')">🗑️ Stanza</button></div>
     <div class="row" style="margin-top:8px"><span class="mut">Tipo:</span>
       <select onchange="setRoomKind('${r.id}',this.value)">${opts}</select></div>
-    <div class="row" style="margin-top:6px"><span class="mut">Altezza 3D</span><input type="number" min="40" placeholder="piano (${PLAN.floorHeight||250})" value="${r.height!=null?r.height:''}" onchange="setRoomHeight('${r.id}',this.value)" style="width:100px"><span class="mut">vuoto = piano · più bassa = soppalco sopra</span></div>
+    <div class="row" style="margin-top:6px"><span class="mut">Altezza 3D</span><input type="number" min="40" placeholder="piano (${PLAN.floorHeight||250})" value="${r.height!=null?r.height:''}" onchange="setRoomHeight('${r.id}',this.value)" style="width:90px"><span class="mut">Base Z</span><input type="number" placeholder="0" value="${r.base||''}" onchange="setRoomBase('${r.id}',this.value)" style="width:90px"></div>
+    <div class="mut" style="margin-top:2px">Altezza vuoto = piano · Base Z = quota del pavimento (per soppalchi/piani superiori)</div>
     <div class="mut" style="margin-top:6px">Porte: ${(r.doors||[]).map(d=>d.type).join(', ')||'nessuna'}</div>
     <div style="margin-top:6px">${wins||'<span class="mut">Nessun'+(isExt(r)?' punto di osservazione':'a finestra')+' in questa stanza.</span>'}</div></div>`;
   for(const w of (r.windows||[])) if(w.photo) drawView(w);
@@ -672,42 +711,50 @@ function buildHouse3D(){
   function wallBox(p0,p1,y0,y1){const ax=p0[0]-CX3,az=p0[1]-CZ3,bx=p1[0]-CX3,bz=p1[1]-CZ3;const len=Math.hypot(bx-ax,bz-az);if(len<0.6||y1-y0<0.6)return;
     const m=new THREE.Mesh(new THREE.BoxGeometry(len,y1-y0,WT3),wallMat);m.position.set((ax+bx)/2,(y0+y1)/2,(az+bz)/2);m.rotation.y=-Math.atan2(bz-az,bx-ax);grp.add(m);}
   let nRooms=0,nWin=0,nDoor=0,nFurn=0,nLoft=0;
+  const builtEdges=new Set(); // dedup muri condivisi tra stanze adiacenti
+  const ekp=p=>Math.round(p[0]/3)+'_'+Math.round(p[1]/3);
+  const edgeKey=(a,b,base)=>Math.round(base/4)+'|'+[ekp(a),ekp(b)].sort().join('#');
   for(const r of (PLAN.rooms||[])){nRooms++;const pts=roomPts(r);const ext=isExt(r);
-    const rh=Math.max(60, r.height!=null?r.height:H); // altezza muri della stanza (soppalco se < piano)
-    // pavimento
+    const base=r.base||0; // quota Z del pavimento
+    const rh=Math.max(60, r.height!=null?r.height:H); // altezza muri della stanza
+    // pavimento (alla quota base)
     const shape=new THREE.Shape(pts.map(p=>new THREE.Vector2(p[0]-CX3,-(p[1]-CZ3))));
     const fgeo=new THREE.ShapeGeometry(shape);fgeo.rotateX(-Math.PI/2);
-    grp.add(new THREE.Mesh(fgeo,new THREE.MeshStandardMaterial({color:ext?0x1c3b2a:0x18314f,roughness:1,side:THREE.DoubleSide})));
+    const fmesh=new THREE.Mesh(fgeo,new THREE.MeshStandardMaterial({color:ext?0x1c3b2a:0x18314f,roughness:1,side:THREE.DoubleSide}));fmesh.position.y=base;grp.add(fmesh);
     // assegna aperture (porte/finestre) al lato più vicino
     const es=[];for(let i=0;i<pts.length;i++)es.push([pts[i],pts[(i+1)%pts.length]]);
     const byEdge=es.map(()=>[]);
     const cen=roomCenter(r);
     for(const d of (r.doors||[])){let bi=0,bd=1e9,bp=0,bl=0;es.forEach((e,i)=>{const pr=projOnSeg([d.x,d.y],e[0],e[1]);if(pr.dist<bd){bd=pr.dist;bi=i;bp=pr.d;bl=pr.len}});byEdge[bi].push({d:bp,len:bl,type:'door'});nDoor++;}
     for(const w of (r.windows||[])){const wx=w.x!=null?w.x:cen.x,wy=w.y!=null?w.y:cen.y;let bi=0,bd=1e9,bp=0,bl=0;es.forEach((e,i)=>{const pr=projOnSeg([wx,wy],e[0],e[1]);if(pr.dist<bd){bd=pr.dist;bi=i;bp=pr.d;bl=pr.len}});byEdge[bi].push({d:bp,len:bl,type:'window'});nWin++;}
-    // muri con vani (a altezza stanza)
-    es.forEach((e,i)=>{const a=e[0],b=e[1];const L=Math.hypot(b[0]-a[0],b[1]-a[1]);if(L<1)return;const ux=(b[0]-a[0])/L,uy=(b[1]-a[1])/L;const pAt=dd=>[a[0]+ux*dd,a[1]+uy*dd];
+    // muri con vani (dalla quota base a base+rh); salta i muri già costruiti da una stanza adiacente
+    es.forEach((e,i)=>{const a=e[0],b=e[1];const L=Math.hypot(b[0]-a[0],b[1]-a[1]);if(L<1)return;
+      const key=edgeKey(a,b,base);if(builtEdges.has(key))return;builtEdges.add(key);
+      const ux=(b[0]-a[0])/L,uy=(b[1]-a[1])/L;const pAt=dd=>[a[0]+ux*dd,a[1]+uy*dd];
       const ops=byEdge[i].slice().sort((x,y)=>x.d-y.d);let cur=0;
       for(const op of ops){const half=(op.type==='window'?WW3:DW3)/2;const s=op.d-half,e2=op.d+half;
-        if(s>cur)wallBox(pAt(cur),pAt(Math.max(cur,s)),0,rh);
+        if(s>cur)wallBox(pAt(cur),pAt(Math.max(cur,s)),base,base+rh);
         const q0=pAt(Math.max(0,s)),q1=pAt(Math.min(L,e2));
-        if(op.type==='window'){wallBox(q0,q1,0,Math.min(SILL3,rh));if(WHEAD3<rh)wallBox(q0,q1,WHEAD3,rh);}
+        if(op.type==='window'){wallBox(q0,q1,base,base+Math.min(SILL3,rh));if(WHEAD3<rh)wallBox(q0,q1,base+WHEAD3,base+rh);}
         cur=Math.max(cur,e2);}
-      if(cur<L)wallBox(pAt(cur),pAt(L),0,rh);
+      if(cur<L)wallBox(pAt(cur),pAt(L),base,base+rh);
     });
-    // soppalco: soletta semitrasparente all'altezza (ridotta) della stanza
-    if(r.height!=null && r.height<H-1){nLoft++;
+    // soppalco: soletta all'altezza stanza SOLO se nessuna stanza è già impilata sopra
+    const hasUpper=(PLAN.rooms||[]).some(o=>o!==r && Math.abs((o.base||0)-(base+rh))<6 && polyInt(roomPts(o),pts));
+    if(r.height!=null && r.height<H-1 && !hasUpper){nLoft++;
       const lgeo=new THREE.ShapeGeometry(new THREE.Shape(pts.map(p=>new THREE.Vector2(p[0]-CX3,-(p[1]-CZ3)))));lgeo.rotateX(-Math.PI/2);
       const slab=new THREE.Mesh(lgeo,new THREE.MeshStandardMaterial({color:0xd29922,transparent:true,opacity:0.5,roughness:1,side:THREE.DoubleSide}));
-      slab.position.y=rh;grp.add(slab);}
+      slab.position.y=base+rh;grp.add(slab);}
   }
-  // mobili con modello .glb (gli altri sono nascosti per scelta)
+  // mobili con modello .glb (gli altri sono nascosti per scelta), alla quota della stanza che li contiene
   const loader=new THREE.GLTFLoader();
   for(const f of (PLAN.furniture||[])){const t=(PLAN.templates||[]).find(x=>x.id===f.tpl);if(!t||!t.model)continue;nFurn++;
+    const fr=roomOfFurn(f);const fb=fr?(fr.base||0):0;
     loader.load('models/'+t.model,(gltf)=>{const obj=gltf.scene;const b=new THREE.Box3().setFromObject(obj);const sz=b.getSize(new THREE.Vector3());
       const sc=Math.min((f.w||t.w)/(sz.x||1),(f.h||t.h)/(sz.z||1));obj.scale.setScalar(sc);
       const b2=new THREE.Box3().setFromObject(obj);const c2=b2.getCenter(new THREE.Vector3());
       obj.position.x-=c2.x;obj.position.z-=c2.z;obj.position.y-=b2.min.y;
-      const piv=new THREE.Group();piv.add(obj);piv.position.set(f.x-CX3,0,f.y-CZ3);piv.rotation.y=-(f.rot||0)*Math.PI/180;grp.add(piv);
+      const piv=new THREE.Group();piv.add(obj);piv.position.set(f.x-CX3,fb,f.y-CZ3);piv.rotation.y=-(f.rot||0)*Math.PI/180;grp.add(piv);
     },undefined,(err)=>{console.warn('glb load fail',t.model,err)});
   }
   // camera + controlli
