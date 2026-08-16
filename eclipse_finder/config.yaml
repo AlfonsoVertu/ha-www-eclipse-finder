@@ -1,0 +1,14 @@
+name: Eclipse Finder
+version: "0.2.0"
+slug: eclipse_finder
+description: Prevede la prossima eclissi e da quale finestra/balcone di casa si vede meglio, con overlay sulla foto della vista
+arch:
+  - amd64
+  - aarch64
+init: false
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:weather-night-partly-cloudy
+panel_title: Eclissi
+hassio_api: true
+homeassistant_api: true
