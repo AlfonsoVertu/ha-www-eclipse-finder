@@ -1,6 +1,8 @@
 FROM python:3.12-slim
 
-RUN pip install --no-cache-dir fastapi "uvicorn[standard]" astronomy-engine python-multipart
+# uvicorn "puro" (asyncio/h11, tutto Python) invece di [standard]: evita uvloop/httptools
+# (estensioni C senza wheel su armv7/i386) così l'add-on compila su tutte le arch dichiarate
+RUN pip install --no-cache-dir fastapi uvicorn astronomy-engine python-multipart
 
 # librerie 3D incluse nell'immagine per rendering offline (.glb):
 # model-viewer per l'anteprima del singolo mobile, three.js (+loader/controls) per la casa 3D
