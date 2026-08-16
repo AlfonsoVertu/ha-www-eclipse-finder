@@ -135,18 +135,27 @@ svg text{user-select:none}
 <div class="card">
   <div class="row" style="justify-content:space-between">
     <div class="row">
-      <button onclick="addRoom()">➕ Stanza</button>
+      <button onclick="startAddRoom()">➕ Stanza</button>
       <button class="sec" id="addWinBtn" onclick="startAddWindow()">🪟 Finestra</button>
       <button class="sec" id="addDoorBtn" onclick="startAddDoor()">🚪 Porta</button>
     </div>
     <span class="mut" id="mode"></span>
   </div>
   <div class="legend" style="margin:8px 0">
-    <span><span class="dot" style="background:var(--d-int)"></span>interna</span>
-    <span><span class="dot" style="background:var(--d-bal)"></span>balcone</span>
-    <span><span class="dot" style="background:var(--d-est)"></span>esterna</span>
-    <span><span class="dot" style="background:var(--d-main)"></span>principale</span>
-    <span>🪟 finestra</span>
+    <span>🏠 interna</span><span>🌿 balcone</span><span>☀️ terrazzo</span><span>🌳 giardino</span>
+    <span>·</span><span>🪟 finestra</span><span>👁️ vista</span>
+    <span>·</span><span class="mut">Porte:</span>
+    <span><span class="dot" style="background:var(--d-int)"></span>int</span>
+    <span><span class="dot" style="background:var(--d-bal)"></span>balc</span>
+    <span><span class="dot" style="background:var(--d-est)"></span>est</span>
+    <span><span class="dot" style="background:var(--d-main)"></span>princ</span>
+  </div>
+  <div id="roomPicker" class="row" style="display:none;margin:6px 0">
+    <span class="mut">Tipo stanza:</span>
+    <button class="sec" onclick="pickRoom('interna')">🏠 interna</button>
+    <button class="sec" onclick="pickRoom('balcone')">🌿 balcone</button>
+    <button class="sec" onclick="pickRoom('terrazzo')">☀️ terrazzo</button>
+    <button class="sec" onclick="pickRoom('giardino')">🌳 giardino</button>
   </div>
   <div id="doorPicker" class="row" style="display:none;margin:6px 0">
     <span class="mut">Tipo porta:</span>
@@ -163,17 +172,17 @@ svg text{user-select:none}
 
 <!-- MODAL: aggiungi finestra -->
 <div id="winModal" class="modal"><div class="modalcard">
-  <b>Nuova finestra</b>
+  <b id="winTitle">Nuova finestra</b>
   <div class="step on" data-s="1"><div class="mut" style="margin:8px 0">In quale stanza?</div>
-    <select id="wRoom" style="width:100%"></select>
-    <div class="row" style="margin-top:8px"><input id="wRoomNew" placeholder="…oppure crea nuova stanza" style="flex:1"></div>
+    <select id="wRoom" style="width:100%" onchange="updateWinLabels()"></select>
+    <div class="row" style="margin-top:8px"><input id="wRoomNew" placeholder="…oppure crea nuova stanza (interna)" style="flex:1" oninput="updateWinLabels()"></div>
     <div class="row" style="justify-content:flex-end;margin-top:10px"><button class="sec" onclick="closeWin()">Annulla</button><button onclick="winStep(2)">Avanti →</button></div>
   </div>
-  <div class="step" data-s="2"><div class="mut" style="margin:8px 0">Nome finestra</div>
+  <div class="step" data-s="2"><div class="mut" style="margin:8px 0" id="wNameLbl">Nome finestra</div>
     <input id="wName" placeholder="Es. Finestra grande / Portafinestra" style="width:100%">
     <div class="row" style="justify-content:space-between;margin-top:10px"><button class="sec" onclick="winStep(1)">←</button><button onclick="winStep(3)">Avanti →</button></div>
   </div>
-  <div class="step" data-s="3"><div class="mut" style="margin:8px 0">Direzione (punta verso la finestra)</div>
+  <div class="step" data-s="3"><div class="mut" style="margin:8px 0" id="wDirLbl">Direzione (punta verso la finestra)</div>
     <div class="livehdg" id="wLive">—°</div><div class="mut" style="text-align:center" id="wLivec"></div>
     <div class="row" style="margin-top:8px"><button class="sec" onclick="enableCompass()">🧭 Bussola</button><button onclick="lockHeading()">🔒 Blocca</button></div>
     <div class="mut" style="text-align:center;margin:8px 0">— oppure gradi a mano —</div>
@@ -194,6 +203,11 @@ let ECL=null, PLAN={rooms:[]}, LIVE=null, LOCKED=null, WPHOTO=null;
 let MODE=null; // 'door:<type>' | 'window' placement
 let SEL=null;  // selected room id
 const DCOL={interna:'var(--d-int)',balcone:'var(--d-bal)',esterna:'var(--d-est)',principale:'var(--d-main)'};
+const ROOM_EMO={interna:'🏠',balcone:'🌿',terrazzo:'☀️',giardino:'🌳'};
+function isExt(r){return r&&r.kind==='esterna'}
+function roomEmo(r){return ROOM_EMO[r.subtype]||(isExt(r)?'🌿':'🏠')}
+function viewIcon(r){return isExt(r)?'👁️':'🪟'}
+function viewNoun(r){return isExt(r)?'punto di osservazione':'finestra'}
 function fmtLocal(iso){try{return new Date(iso).toLocaleString('it-IT',{dateStyle:'medium',timeStyle:'short'})}catch(e){return iso}}
 function angdiff(a,b){return ((a-b+540)%360)-180}
 function compass16(az){const d=["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSO","SO","OSO","O","ONO","NO","NNO"];return d[Math.round((az%360)/22.5)%16]}
@@ -241,18 +255,21 @@ function render(){
   s+=`<g transform="translate(60,60)"><circle r="34" fill="none" stroke="#30363d"/><line x1="0" y1="0" x2="0" y2="-30" stroke="var(--acc)" stroke-width="2" marker-end="url(#arrow)"/><text x="0" y="-38" fill="var(--acc)" font-size="14" text-anchor="middle">N</text></g>`;
   // stanze
   for(const r of PLAN.rooms){
-    const selcol=r.id===SEL?'var(--acc)':'#3b4552';
+    const selcol=r.id===SEL?'var(--acc)':'#3b4552';const ext=isExt(r);
+    const fill=ext?'rgba(63,185,80,.09)':'rgba(88,166,255,.08)';
+    const dash=ext?' stroke-dasharray="8 5"':'';
     s+=`<g data-room="${r.id}">
-      <rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="6" fill="rgba(88,166,255,.08)" stroke="${selcol}" stroke-width="${r.id===SEL?3:1.5}"/>
-      <text x="${r.x+8}" y="${r.y+20}" fill="var(--fg)" font-size="15" font-weight="700">${escapeHtml(r.name||'Stanza')}</text>`;
+      <rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="6" fill="${fill}" stroke="${selcol}" stroke-width="${r.id===SEL?3:1.5}"${dash}/>
+      <text x="${r.x+8}" y="${r.y+20}" fill="var(--fg)" font-size="15" font-weight="700">${roomEmo(r)} ${escapeHtml(r.name||'Stanza')}</text>`;
     // porte
     for(const d of (r.doors||[])) s+=`<rect x="${d.x-7}" y="${d.y-7}" width="14" height="14" rx="3" fill="${DCOL[d.type]||'#888'}" stroke="#0b0f14"/>`;
-    // finestre (marker + freccia azimut)
+    // finestre / punti di osservazione (marker + freccia azimut)
     for(const w of (r.windows||[])){const wx=w.x!=null?w.x:r.x+r.w/2, wy=w.y!=null?w.y:r.y+r.h/2;
       const [ax,ay]=polar(wx,wy,26,w.azimuth);
       const inview=eclInView(w);
-      s+=`<line x1="${wx}" y1="${wy}" x2="${ax}" y2="${ay}" stroke="${inview?'#ffd24a':'#8b949e'}" stroke-width="2" marker-end="url(#arrow)"/>
-       <circle cx="${wx}" cy="${wy}" r="6" fill="#e6edf3" stroke="${inview?'#f0a500':'#30363d'}" stroke-width="2"/>`;}
+      s+=`<line x1="${wx}" y1="${wy}" x2="${ax}" y2="${ay}" stroke="${inview?'#ffd24a':'#8b949e'}" stroke-width="2" marker-end="url(#arrow)"/>`;
+      if(ext)s+=`<rect x="${wx-6}" y="${wy-6}" width="12" height="12" transform="rotate(45 ${wx} ${wy})" fill="#3fb950" stroke="${inview?'#f0a500':'#0b0f14'}" stroke-width="2"/>`;
+      else s+=`<circle cx="${wx}" cy="${wy}" r="6" fill="#e6edf3" stroke="${inview?'#f0a500':'#30363d'}" stroke-width="2"/>`;}
     // maniglia resize
     if(r.id===SEL)s+=`<rect data-resize="${r.id}" x="${r.x+r.w-9}" y="${r.y+r.h-9}" width="18" height="18" fill="var(--acc)" rx="3" style="cursor:nwse-resize"/>`;
     s+=`</g>`;
@@ -302,20 +319,35 @@ function startAddDoor(){
   $('#doorPicker').style.display='flex';
 }
 function pickDoor(t){$('#doorPicker').style.display='none';setMode('door:'+t);}
-function setMode(m){MODE=m;$('#mode').textContent=m?('Tocca sul piano per posizionare: '+m.replace('door:','porta ')):'';if(!m)$('#doorPicker').style.display='none';}
+function setMode(m){MODE=m;$('#mode').textContent=m?('Tocca sul piano per posizionare: '+m.replace('door:','porta ')):'';if(!m){$('#doorPicker').style.display='none';$('#roomPicker').style.display='none'}}
 
-function addRoom(name){
-  const r={id:uid(),name:name||('Stanza '+(PLAN.rooms.length+1)),x:120+PLAN.rooms.length*30,y:120+PLAN.rooms.length*24,w:220,h:160,windows:[],doors:[]};
+function startAddRoom(){$('#doorPicker').style.display='none';$('#roomPicker').style.display='flex';}
+function pickRoom(t){$('#roomPicker').style.display='none';
+  const kind=t==='interna'?'interna':'esterna';const sub=t==='interna'?null:t;
+  addRoom(null,kind,sub);
+}
+function cap(s){return s?s.charAt(0).toUpperCase()+s.slice(1):s}
+function addRoom(name,kind,sub){
+  kind=kind||'interna';sub=sub||null;
+  const def=name||(kind==='interna'?('Stanza '+(PLAN.rooms.length+1)):(cap(sub)+' '+(PLAN.rooms.length+1)));
+  const r={id:uid(),name:def,kind:kind,subtype:sub,x:120+PLAN.rooms.length*30,y:120+PLAN.rooms.length*24,w:220,h:160,windows:[],doors:[]};
   PLAN.rooms.push(r);SEL=r.id;render();savePlan();return r;
 }
+window.setRoomKind=(id,v)=>{const r=PLAN.rooms.find(x=>x.id===id);if(!r)return;
+  r.kind=v==='interna'?'interna':'esterna';r.subtype=v==='interna'?null:v;render();savePlan();};
 
 function renderRoomPanel(){
   const box=$('#roomPanel');const r=PLAN.rooms.find(x=>x.id===SEL);
-  if(!r){box.innerHTML='';return}
+  const awb=$('#addWinBtn');
+  if(!r){box.innerHTML='';if(awb){awb.innerHTML='🪟 Finestra'}return}
+  if(awb)awb.innerHTML=viewIcon(r)+' '+(isExt(r)?'Vista':'Finestra');
+  const kv=isExt(r)?(r.subtype||'balcone'):'interna';
+  const opts=[['interna','🏠 interna'],['balcone','🌿 balcone'],['terrazzo','☀️ terrazzo'],['giardino','🌳 giardino']]
+    .map(([v,l])=>`<option value="${v}"${v===kv?' selected':''}>${l}</option>`).join('');
   let wins='';
   for(const w of (r.windows||[])){const e=eclInView(w);
     wins+=`<div class="card" style="margin:6px 0">
-      <div class="row" style="justify-content:space-between"><b>🪟 ${escapeHtml(w.name)}</b><span class="mut">${compass16(w.azimuth)} · ${w.azimuth}°</span></div>
+      <div class="row" style="justify-content:space-between"><b>${viewIcon(r)} ${escapeHtml(w.name)}</b><span class="mut">${compass16(w.azimuth)} · ${w.azimuth}°</span></div>
       <div>${e?'<span class="badge ok">'+e.type.split(' ')[1]+' visibile da qui</span>':'<span class="mut">nessuna eclissi da questo affaccio</span>'}</div>
       <div id="v_${w.id}"></div>
       <div class="row" style="margin-top:6px"><button class="sec" onclick="delWin('${r.id}','${w.id}')">🗑️</button></div></div>`;
@@ -323,8 +355,10 @@ function renderRoomPanel(){
   box.innerHTML=`<div class="card"><div class="row" style="justify-content:space-between">
       <input value="${escapeHtml(r.name)}" onchange="renRoom('${r.id}',this.value)" style="flex:1;min-width:140px">
       <button class="sec" onclick="delRoom('${r.id}')">🗑️ Stanza</button></div>
+    <div class="row" style="margin-top:8px"><span class="mut">Tipo:</span>
+      <select onchange="setRoomKind('${r.id}',this.value)">${opts}</select></div>
     <div class="mut" style="margin-top:6px">Porte: ${(r.doors||[]).map(d=>d.type).join(', ')||'nessuna'}</div>
-    <div style="margin-top:6px">${wins||'<span class="mut">Nessuna finestra in questa stanza.</span>'}</div></div>`;
+    <div style="margin-top:6px">${wins||'<span class="mut">Nessun'+(isExt(r)?' punto di osservazione':'a finestra')+' in questa stanza.</span>'}</div></div>`;
   for(const w of (r.windows||[])) if(w.photo) drawView(w);
 }
 function drawView(w){const el=document.getElementById('v_'+w.id);if(!el)return;
@@ -349,7 +383,15 @@ function startAddWindow(){
   LOCKED=null;WPHOTO=null;$('#wS3').disabled=true;$('#wName').value='';$('#wDeg').value='';$('#wPname').textContent='';$('#wPrev').innerHTML='';$('#wLive').textContent='—°';$('#wLivec').textContent='';
   const sel=$('#wRoom');sel.innerHTML='';for(const r of PLAN.rooms){const o=document.createElement('option');o.value=r.id;o.textContent=r.name;sel.appendChild(o)}
   if(SEL)sel.value=SEL;$('#wRoomNew').value='';
-  winStep(1);$('#winModal').classList.add('on');
+  updateWinLabels();winStep(1);$('#winModal').classList.add('on');
+}
+function curWinRoom(){if($('#wRoomNew').value.trim())return{kind:'interna'};return PLAN.rooms.find(x=>x.id===$('#wRoom').value)||{kind:'interna'}}
+function updateWinLabels(){const ext=curWinRoom().kind==='esterna';
+  $('#winTitle').textContent=ext?'Nuovo punto di osservazione':'Nuova finestra';
+  $('#wNameLbl').textContent=ext?'Nome del punto':'Nome finestra';
+  $('#wName').placeholder=ext?'Es. Angolo balcone / Ringhiera SO':'Es. Finestra grande / Portafinestra';
+  $('#wDirLbl').textContent=ext?'Direzione (punta verso la vista / orizzonte)':'Direzione (punta verso la finestra)';
+  $('#wSave').textContent=ext?'💾 Salva punto':'💾 Salva finestra';
 }
 function closeWin(){$('#winModal').classList.remove('on')}
 function winStep(n){document.querySelectorAll('#winModal .step').forEach(s=>s.classList.toggle('on',+s.dataset.s===n));
