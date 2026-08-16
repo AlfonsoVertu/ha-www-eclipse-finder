@@ -5,8 +5,9 @@ from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 import uvicorn
 import astronomy
 
-DATA = "/data"; PHOTOS = os.path.join(DATA, "photos"); PLAN_FILE = os.path.join(DATA, "plan.json")
-os.makedirs(PHOTOS, exist_ok=True)
+DATA = "/data"; PHOTOS = os.path.join(DATA, "photos"); MODELS = os.path.join(DATA, "models"); PLAN_FILE = os.path.join(DATA, "plan.json")
+os.makedirs(PHOTOS, exist_ok=True); os.makedirs(MODELS, exist_ok=True)
+VENDOR = "/vendor"  # libreria model-viewer inclusa nell'immagine (offline)
 app = FastAPI()
 
 def ha_config():
@@ -94,6 +95,26 @@ def get_photo(fn: str):
     if not os.path.exists(p): raise HTTPException(404,"not found")
     return FileResponse(p)
 
+@app.post("/api/model")
+async def api_model(file: UploadFile = File(...)):
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in (".glb",".gltf"): ext=".glb"
+    fn = uuid.uuid4().hex[:12]+ext
+    with open(os.path.join(MODELS, fn),"wb") as f: f.write(await file.read())
+    return {"model": fn}
+
+@app.get("/models/{fn}")
+def get_model(fn: str):
+    p = os.path.join(MODELS, os.path.basename(fn))
+    if not os.path.exists(p): raise HTTPException(404,"not found")
+    return FileResponse(p)
+
+@app.get("/vendor/model-viewer.min.js")
+def get_mv():
+    p = os.path.join(VENDOR, "model-viewer.min.js")
+    if not os.path.exists(p): raise HTTPException(404,"libreria 3D non inclusa nel build")
+    return FileResponse(p, media_type="text/javascript")
+
 @app.get("/", response_class=HTMLResponse)
 def index(): return HTML
 
@@ -125,7 +146,10 @@ svg text{user-select:none}
 .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:14px;z-index:9}
 .modal.on{display:flex}.modalcard{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;max-width:460px;width:100%;max-height:90vh;overflow:auto}
-</style></head><body>
+model-viewer{--poster-color:transparent}
+</style>
+<script type="module" src="vendor/model-viewer.min.js"></script>
+</head><body>
 <h1>🌒 Eclipse Finder</h1>
 <div id="loc" class="mut">Carico…</div>
 <h2>Prossima eclissi</h2>
@@ -186,7 +210,15 @@ svg text{user-select:none}
   <div class="mut" style="margin:8px 0">Nome e dimensioni dei lati (unità del piano). Lo costruisci una volta e poi lo piazzi quante volte vuoi.</div>
   <input id="tplName" placeholder="Es. Scrivania / Armadio 3 ante" style="width:100%">
   <div class="row" style="margin-top:8px"><input id="tplW" type="number" min="10" placeholder="larghezza" style="flex:1"><input id="tplH" type="number" min="10" placeholder="profondità" style="flex:1"></div>
+  <div class="row" style="margin-top:8px"><label class="sec" style="padding:9px;border:1px solid var(--bd);border-radius:8px;cursor:pointer">🧊 Modello 3D (.glb) opz.<input id="tplModel" type="file" accept=".glb,.gltf,model/gltf-binary" style="display:none" onchange="tplModelPick(this)"></label><span id="tplModelName" class="mut"></span></div>
+  <div class="mut" style="margin-top:4px">Esporta da Blender in glTF 2.0 (.glb), senza compressione Draco per il 3D offline.</div>
   <div class="row" style="justify-content:flex-end;margin-top:10px"><button class="sec" onclick="closeTpl()">Annulla</button><button onclick="saveTpl()">💾 Salva template</button></div>
+</div></div>
+
+<!-- MODAL: vista 3D a schermo intero -->
+<div id="modelModal" class="modal"><div class="modalcard" style="max-width:680px">
+  <div class="row" style="justify-content:space-between"><b>🧊 Vista 3D</b><button class="sec" onclick="closeModel3D()">✖️ Chiudi</button></div>
+  <div id="model3dBox" style="margin-top:8px"></div>
 </div></div>
 
 <!-- MODAL: aggiungi finestra -->
@@ -223,7 +255,7 @@ svg text{user-select:none}
 
 <script>
 const $=s=>document.querySelector(s);
-let ECL=null, PLAN={rooms:[]}, LIVE=null, LOCKED=null, WPHOTO=null, LIVEPITCH=null, LOCKEDALT=null;
+let ECL=null, PLAN={rooms:[]}, LIVE=null, LOCKED=null, WPHOTO=null, LIVEPITCH=null, LOCKEDALT=null, TPLMODEL=null;
 let MODE=null; // 'door:<type>' | 'draw' | 'furn:<tpl>' | placement
 let SEL=null;  // selected room id
 let SELF=null; // selected furniture id
@@ -402,26 +434,42 @@ function placeAt(p){
 }
 // ---- mobili: libreria template + istanze ----
 function renderFurnPicker(){let h='<span class="mut">Mobile:</span>';
-  for(const t of (PLAN.templates||[]))h+=`<button class="sec" onclick="pickFurn('${t.id}')">${escapeHtml(t.name)} <small>${t.w}×${t.h}</small></button>`;
+  for(const t of (PLAN.templates||[]))h+=`<button class="sec" onclick="pickFurn('${t.id}')">${escapeHtml(t.name)} <small>${t.w}×${t.h}${t.model?' 🧊':''}</small></button>`;
   h+='<button onclick="openTpl()">➕ Nuovo template</button>';$('#furnPicker').innerHTML=h;}
 function startAddFurn(){setMode(null);renderFurnPicker();$('#furnPicker').style.display='flex';}
 function pickFurn(id){$('#furnPicker').style.display='none';setMode('furn:'+id);}
-function openTpl(){$('#furnPicker').style.display='none';$('#tplName').value='';$('#tplW').value='';$('#tplH').value='';$('#tplModal').classList.add('on');}
+function openTpl(){$('#furnPicker').style.display='none';$('#tplName').value='';$('#tplW').value='';$('#tplH').value='';TPLMODEL=null;$('#tplModel').value='';$('#tplModelName').textContent='';$('#tplModal').classList.add('on');}
 function closeTpl(){$('#tplModal').classList.remove('on');}
-function saveTpl(){const n=$('#tplName').value.trim();const w=parseInt($('#tplW').value),h=parseInt($('#tplH').value);
+function tplModelPick(inp){TPLMODEL=inp.files[0]||null;$('#tplModelName').textContent=TPLMODEL?('✓ '+TPLMODEL.name):'';}
+async function uploadModel(file){const fd=new FormData();fd.append('file',file);return (await (await fetch('api/model',{method:'POST',body:fd})).json()).model;}
+async function saveTpl(){const n=$('#tplName').value.trim();const w=parseInt($('#tplW').value),h=parseInt($('#tplH').value);
   if(!n||!(w>0)||!(h>0)){alert('Servono nome e dimensioni valide');return}
-  PLAN.templates=PLAN.templates||[];PLAN.templates.push({id:uid(),name:n,w,h});savePlan();closeTpl();renderFurnPicker();$('#furnPicker').style.display='flex';}
+  let model=null;if(TPLMODEL){try{model=await uploadModel(TPLMODEL)}catch(e){alert('Upload modello fallito');return}}
+  PLAN.templates=PLAN.templates||[];const t={id:uid(),name:n,w,h};if(model)t.model=model;PLAN.templates.push(t);
+  savePlan();closeTpl();renderFurnPicker();$('#furnPicker').style.display='flex';}
+async function addTplModel(tplId,inp){if(!inp.files[0])return;let m;try{m=await uploadModel(inp.files[0])}catch(e){alert('Upload fallito');return}
+  const t=(PLAN.templates||[]).find(x=>x.id===tplId);if(t){t.model=m;savePlan();render()}}
+window.delTplModel=(tplId)=>{const t=(PLAN.templates||[]).find(x=>x.id===tplId);if(t&&confirm('Rimuovere il modello 3D dal template?')){delete t.model;savePlan();render()}};
+function openModel3D(fn){$('#model3dBox').innerHTML=`<model-viewer src="models/${fn}" camera-controls auto-rotate style="width:100%;height:70vh;background:#0b0f14;border-radius:8px"></model-viewer>`;$('#modelModal').classList.add('on');}
+function closeModel3D(){$('#modelModal').classList.remove('on');$('#model3dBox').innerHTML='';}
 function renderFurnPanel(){const box=$('#furnPanel');const f=(PLAN.furniture||[]).find(x=>x.id===SELF);if(!f){box.innerHTML='';return}
+  const t=(PLAN.templates||[]).find(x=>x.id===f.tpl);const model=t&&t.model;
+  let m3d='';
+  if(model)m3d=`<div style="margin-top:8px"><model-viewer src="models/${model}" camera-controls auto-rotate disable-tap style="width:100%;height:200px;background:#0b0f14;border-radius:8px"></model-viewer>
+      <div class="row" style="margin-top:6px"><button class="sec" onclick="openModel3D('${model}')">🧊 Vista 3D</button><button class="sec" onclick="delTplModel('${f.tpl}')">Rimuovi 3D</button></div></div>`;
+  else if(t)m3d=`<div class="row" style="margin-top:8px"><label class="sec" style="padding:9px;border:1px solid var(--bd);border-radius:8px;cursor:pointer">🧊 Aggiungi modello 3D (.glb)<input type="file" accept=".glb,.gltf" style="display:none" onchange="addTplModel('${f.tpl}',this)"></label></div><div class="mut" style="margin-top:4px">si applica al template «${escapeHtml(t.name)}»</div>`;
   box.innerHTML=`<div class="card"><div class="row" style="justify-content:space-between"><b>🛋️ Mobile</b><button class="sec" onclick="delFurn('${f.id}')">🗑️</button></div>
     <div class="row" style="margin-top:8px"><span class="mut">Nome</span><input value="${escapeHtml(f.name||'')}" onchange="setFurn('${f.id}','name',this.value)" style="flex:1;min-width:120px"></div>
     <div class="row" style="margin-top:6px"><span class="mut">L</span><input type="number" value="${f.w}" onchange="setFurn('${f.id}','w',this.value)" style="width:76px"><span class="mut">P</span><input type="number" value="${f.h}" onchange="setFurn('${f.id}','h',this.value)" style="width:76px"><span class="mut">Rot°</span><input type="number" value="${f.rot||0}" onchange="setFurn('${f.id}','rot',this.value)" style="width:76px"></div>
+    ${m3d}
     <div class="row" style="margin-top:8px"><button class="sec" onclick="furnToTpl('${f.id}')">⭐ Salva come template</button></div></div>`;}
 window.setFurn=(id,k,v)=>{const f=PLAN.furniture.find(x=>x.id===id);if(!f)return;
   if(k==='name')f.name=v;else{let n=parseInt(v);if(!isNaN(n)){if(k==='rot')f.rot=((n%360)+360)%360;else f[k]=Math.max(10,n)}}
   render();savePlan();};
 window.delFurn=(id)=>{PLAN.furniture=PLAN.furniture.filter(x=>x.id!==id);SELF=null;render();savePlan();};
 window.furnToTpl=(id)=>{const f=PLAN.furniture.find(x=>x.id===id);if(!f)return;const n=prompt('Nome del template',f.name||'Mobile');if(!n)return;
-  PLAN.templates=PLAN.templates||[];PLAN.templates.push({id:uid(),name:n.trim(),w:f.w,h:f.h});savePlan();alert('Template salvato: '+n.trim());};
+  const src=(PLAN.templates||[]).find(x=>x.id===f.tpl);const nt={id:uid(),name:n.trim(),w:f.w,h:f.h};if(src&&src.model)nt.model=src.model;
+  PLAN.templates=PLAN.templates||[];PLAN.templates.push(nt);savePlan();alert('Template salvato: '+n.trim());};
 function startAddDoor(){
   if(!SEL){alert('Seleziona prima una stanza');return}
   $('#doorPicker').style.display='flex';
