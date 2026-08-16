@@ -1,9 +1,19 @@
-import os, json, uuid, urllib.request
+import os, json, uuid, urllib.request, hmac
 import datetime as dt
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Header
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 import uvicorn
 import astronomy
+
+def addon_options():
+    try:
+        return json.load(open("/data/options.json"))
+    except Exception:
+        return {}
+
+# Chiave per l'export protetto verso client esterni (es. WordPress/VWGK).
+# Impostala nelle opzioni dell'add-on (api_key). Vuota = export disabilitato.
+API_KEY = str(addon_options().get("api_key") or os.environ.get("VWGK_API_KEY") or "")
 
 DATA = "/data"; PHOTOS = os.path.join(DATA, "photos"); MODELS = os.path.join(DATA, "models"); PLAN_FILE = os.path.join(DATA, "plan.json")
 os.makedirs(PHOTOS, exist_ok=True); os.makedirs(MODELS, exist_ok=True)
@@ -80,6 +90,27 @@ async def api_save_plan(req: Request):
     body = await req.json()
     if not isinstance(body, dict) or "rooms" not in body: raise HTTPException(400,"formato non valido")
     save_plan(body); return {"ok": True}
+
+@app.get("/api/export")
+def api_export(x_api_key: str = Header(default="")):
+    """Export protetto (X-API-Key) di planimetria + eclissi per client esterni (WordPress/VWGK)."""
+    if not API_KEY:
+        raise HTTPException(403, "export disabilitato: imposta 'api_key' nelle opzioni dell'add-on")
+    if not hmac.compare_digest(x_api_key or "", API_KEY):
+        raise HTTPException(401, "api key non valida")
+    out = {"plan": load_plan(), "generated_utc": dt.datetime.now(dt.timezone.utc).isoformat()}
+    try:
+        loc = get_location()
+        if loc.get("latitude") is not None:
+            out["location"] = loc
+            obs = astronomy.Observer(loc["latitude"], loc["longitude"], loc["elevation"])
+            out["eclipse"] = {}
+            for k, fn in (("solar", next_solar), ("lunar", next_lunar)):
+                try: out["eclipse"][k] = fn(obs)
+                except Exception as ex: out["eclipse"][k] = {"error": str(ex)}
+    except Exception as ex:
+        out["location_error"] = str(ex)
+    return out
 
 @app.post("/api/photo")
 async def api_photo(file: UploadFile = File(...)):
