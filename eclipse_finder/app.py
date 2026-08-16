@@ -139,12 +139,13 @@ svg text{user-select:none}
       <button class="sec" onclick="startDrawRoom()">✏️ Disegna</button>
       <button class="sec" id="addWinBtn" onclick="startAddWindow()">🪟 Finestra</button>
       <button class="sec" id="addDoorBtn" onclick="startAddDoor()">🚪 Porta</button>
+      <button class="sec" onclick="startAddFurn()">🛋️ Mobile</button>
     </div>
     <span class="mut" id="mode"></span>
   </div>
   <div class="legend" style="margin:8px 0">
     <span>🏠 interna</span><span>🌿 balcone</span><span>☀️ terrazzo</span><span>🌳 giardino</span>
-    <span>·</span><span>🪟 finestra</span><span>👁️ vista</span>
+    <span>·</span><span>🪟 finestra</span><span>👁️ vista</span><span>🛋️ mobile</span>
     <span>·</span><span class="mut">Porte:</span>
     <span><span class="dot" style="background:var(--d-int)"></span>int</span>
     <span><span class="dot" style="background:var(--d-bal)"></span>balc</span>
@@ -171,11 +172,22 @@ svg text{user-select:none}
     <button class="sec" onclick="pickDoor('esterna')">🚶 esterna</button>
     <button class="sec" onclick="pickDoor('principale')">🏠 principale</button>
   </div>
+  <div id="furnPicker" class="row" style="display:none;margin:6px 0"></div>
   <div id="planwrap"><svg id="plan" width="100%" viewBox="0 0 1000 640" style="display:block"></svg></div>
   <div id="sel" class="mut" style="margin-top:8px">Tocca una stanza per selezionarla. Trascina per spostare, maniglia ◢ per ridimensionare. Stanze disegnate: trascina i vertici ◆. Usa ✏️ Disegna per forme non rettangolari.</div>
 </div>
 
 <div id="roomPanel"></div>
+<div id="furnPanel"></div>
+
+<!-- MODAL: nuovo template mobile -->
+<div id="tplModal" class="modal"><div class="modalcard">
+  <b>Nuovo template mobile</b>
+  <div class="mut" style="margin:8px 0">Nome e dimensioni dei lati (unità del piano). Lo costruisci una volta e poi lo piazzi quante volte vuoi.</div>
+  <input id="tplName" placeholder="Es. Scrivania / Armadio 3 ante" style="width:100%">
+  <div class="row" style="margin-top:8px"><input id="tplW" type="number" min="10" placeholder="larghezza" style="flex:1"><input id="tplH" type="number" min="10" placeholder="profondità" style="flex:1"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px"><button class="sec" onclick="closeTpl()">Annulla</button><button onclick="saveTpl()">💾 Salva template</button></div>
+</div></div>
 
 <!-- MODAL: aggiungi finestra -->
 <div id="winModal" class="modal"><div class="modalcard">
@@ -212,9 +224,15 @@ svg text{user-select:none}
 <script>
 const $=s=>document.querySelector(s);
 let ECL=null, PLAN={rooms:[]}, LIVE=null, LOCKED=null, WPHOTO=null, LIVEPITCH=null, LOCKEDALT=null;
-let MODE=null; // 'door:<type>' | 'draw' | placement
+let MODE=null; // 'door:<type>' | 'draw' | 'furn:<tpl>' | placement
 let SEL=null;  // selected room id
+let SELF=null; // selected furniture id
 let DRAWPTS=[]; // vertici della stanza in disegno
+const DEFAULT_TEMPLATES=[
+  {id:'t_arm',name:'Armadio',w:110,h:55},
+  {id:'t_single',name:'Letto singolo',w:90,h:200},
+  {id:'t_double',name:'Letto matrimoniale',w:160,h:200},
+];
 const DCOL={interna:'var(--d-int)',balcone:'var(--d-bal)',esterna:'var(--d-est)',principale:'var(--d-main)'};
 const ROOM_EMO={interna:'🏠',balcone:'🌿',terrazzo:'☀️',giardino:'🌳'};
 function isExt(r){return r&&r.kind==='esterna'}
@@ -244,6 +262,8 @@ async function boot(){
       <div style="margin-left:auto;text-align:right"><div class="big">${e.altitude}°</div><small>altezza</small></div></div>`;box.appendChild(c);}
   }
   PLAN=await (await fetch('api/plan')).json(); if(!PLAN.rooms)PLAN={rooms:[]};
+  if(!PLAN.templates)PLAN.templates=DEFAULT_TEMPLATES.slice();
+  if(!PLAN.furniture)PLAN.furniture=[];
   PLAN.rooms.forEach(clampRoom); savePlan(); // recupera stanze finite fuori dal piano
   render();
 }
@@ -303,14 +323,27 @@ function render(){
     }
     s+=`</g>`;
   }
+  // mobili
+  for(const f of (PLAN.furniture||[])){const sel=f.id===SELF;const stroke=sel?'var(--acc)':'#8b949e';
+    s+=`<g transform="rotate(${f.rot||0} ${f.x} ${f.y})">
+      <rect x="${f.x-f.w/2}" y="${f.y-f.h/2}" width="${f.w}" height="${f.h}" rx="4" fill="rgba(139,148,158,.20)" stroke="${stroke}" stroke-width="${sel?2.5:1.5}"/>
+      <text x="${f.x}" y="${f.y}" fill="var(--fg)" font-size="12" text-anchor="middle" dominant-baseline="middle">${escapeHtml(f.name||'')}</text>`;
+    if(sel){
+      s+=`<rect data-furnrz="${f.id}" x="${f.x+f.w/2-7}" y="${f.y+f.h/2-7}" width="14" height="14" fill="var(--acc)" rx="2" style="cursor:nwse-resize"/>`;
+      s+=`<line x1="${f.x}" y1="${f.y-f.h/2}" x2="${f.x}" y2="${f.y-f.h/2-22}" stroke="var(--acc)" stroke-width="1.5"/><circle data-furnrot="${f.id}" cx="${f.x}" cy="${f.y-f.h/2-22}" r="7" fill="var(--acc)" style="cursor:grab"/>`;
+    }
+    s+=`</g>`;
+  }
   // forma in disegno
   if(MODE==='draw'&&DRAWPTS.length){const pts=DRAWPTS.map(p=>p[0]+','+p[1]).join(' ');
     s+=`<polyline points="${pts}" fill="rgba(240,165,0,.10)" stroke="var(--acc)" stroke-width="2" stroke-dasharray="6 4"/>`;
     for(const v of DRAWPTS)s+=`<circle cx="${v[0]}" cy="${v[1]}" r="5" fill="var(--acc)"/>`;}
   s+=eclArrow();
   SVG.innerHTML=s;
-  renderRoomPanel();
+  renderRoomPanel();renderFurnPanel();
 }
+function clampFurn(f){f.x=Math.max(0,Math.min(1000,Math.round(f.x)));f.y=Math.max(0,Math.min(640,Math.round(f.y)));}
+function furnHit(f,p){const a=-(f.rot||0)*Math.PI/180,dx=p.x-f.x,dy=p.y-f.y;const lx=dx*Math.cos(a)-dy*Math.sin(a),ly=dx*Math.sin(a)+dy*Math.cos(a);return Math.abs(lx)<=f.w/2&&Math.abs(ly)<=f.h/2;}
 function escapeHtml(t){return (t+'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function eclInView(w){for(const k of['solar','lunar']){const e=ECL&&ECL[k];if(!e||!e.visible)continue;if(Math.abs(angdiff(e.azimuth,w.azimuth))<=(w.photo_fov||66)/2)return e}return null}
 
@@ -324,25 +357,34 @@ SVG.addEventListener('pointerdown',ev=>{
   if(vt){const a=vt.split(':');drag={mode:'vertmove',id:a[0],vi:+a[1]};SVG.setPointerCapture(ev.pointerId);return}
   const rz=ev.target.getAttribute&&ev.target.getAttribute('data-resize');
   if(rz){drag={id:rz,mode:'resize'};SVG.setPointerCapture(ev.pointerId);return}
+  const fz=ev.target.getAttribute&&ev.target.getAttribute('data-furnrz');
+  if(fz){SELF=fz;SEL=null;drag={mode:'furnresize',id:fz};SVG.setPointerCapture(ev.pointerId);render();return}
+  const fr=ev.target.getAttribute&&ev.target.getAttribute('data-furnrot');
+  if(fr){SELF=fr;SEL=null;drag={mode:'furnrot',id:fr};SVG.setPointerCapture(ev.pointerId);render();return}
   // hit-test finestre/porte (trascinabili) prima delle stanze
   for(const r of PLAN.rooms){const c=roomCenter(r);
     for(const w of (r.windows||[])){const wx=w.x!=null?w.x:c.x, wy=w.y!=null?w.y:c.y;
-      if(Math.hypot(p.x-wx,p.y-wy)<14){SEL=r.id;drag={mode:'winmove',roomId:r.id,eid:w.id};SVG.setPointerCapture(ev.pointerId);render();return}}
-    for(const d of (r.doors||[])){if(Math.hypot(p.x-d.x,p.y-d.y)<12){SEL=r.id;drag={mode:'doormove',roomId:r.id,eid:d.id};SVG.setPointerCapture(ev.pointerId);render();return}}
+      if(Math.hypot(p.x-wx,p.y-wy)<14){SEL=r.id;SELF=null;drag={mode:'winmove',roomId:r.id,eid:w.id};SVG.setPointerCapture(ev.pointerId);render();return}}
+    for(const d of (r.doors||[])){if(Math.hypot(p.x-d.x,p.y-d.y)<12){SEL=r.id;SELF=null;drag={mode:'doormove',roomId:r.id,eid:d.id};SVG.setPointerCapture(ev.pointerId);render();return}}
   }
+  // mobili (sopra le stanze)
+  for(let i=(PLAN.furniture||[]).length-1;i>=0;i--){const f=PLAN.furniture[i];if(furnHit(f,p)){SELF=f.id;SEL=null;drag={mode:'furnmove',id:f.id,dx:p.x-f.x,dy:p.y-f.y};SVG.setPointerCapture(ev.pointerId);render();return}}
   // trova stanza sotto il punto (dall'alto)
   let hit=null;for(let i=PLAN.rooms.length-1;i>=0;i--){if(pointInRoom(PLAN.rooms[i],p)){hit=PLAN.rooms[i];break}}
-  if(hit){SEL=hit.id;
+  if(hit){SEL=hit.id;SELF=null;
     if(hit.poly&&hit.poly.length)drag={id:hit.id,mode:'polymove',sx:p.x,sy:p.y,orig:hit.poly.map(v=>[v[0],v[1]])};
     else drag={id:hit.id,mode:'move',dx:p.x-hit.x,dy:p.y-hit.y};
     SVG.setPointerCapture(ev.pointerId);render();}
-  else{SEL=null;render();}
+  else{SEL=null;SELF=null;render();}
 });
 SVG.addEventListener('pointermove',ev=>{if(!drag)return;const p=svgPt(ev);
   if(drag.mode==='winmove'){const r=PLAN.rooms.find(x=>x.id===drag.roomId);const w=r&&r.windows.find(x=>x.id===drag.eid);if(w){w.x=Math.round(p.x);w.y=Math.round(p.y);render()}return}
   if(drag.mode==='doormove'){const r=PLAN.rooms.find(x=>x.id===drag.roomId);const d=r&&r.doors.find(x=>x.id===drag.eid);if(d){d.x=Math.round(p.x);d.y=Math.round(p.y);render()}return}
   if(drag.mode==='vertmove'){const r=PLAN.rooms.find(x=>x.id===drag.id);if(r&&r.poly){r.poly[drag.vi]=[Math.round(p.x),Math.round(p.y)];clampRoom(r);render()}return}
   if(drag.mode==='polymove'){const r=PLAN.rooms.find(x=>x.id===drag.id);if(r&&r.poly){const dx=p.x-drag.sx,dy=p.y-drag.sy;r.poly=drag.orig.map(v=>[Math.round(v[0]+dx),Math.round(v[1]+dy)]);clampRoom(r);render()}return}
+  if(drag.mode==='furnmove'){const f=PLAN.furniture.find(x=>x.id===drag.id);if(f){f.x=p.x-drag.dx;f.y=p.y-drag.dy;clampFurn(f);render()}return}
+  if(drag.mode==='furnrot'){const f=PLAN.furniture.find(x=>x.id===drag.id);if(f){let ang=Math.atan2(p.y-f.y,p.x-f.x)*180/Math.PI+90;f.rot=Math.round(((ang%360)+360)%360);render()}return}
+  if(drag.mode==='furnresize'){const f=PLAN.furniture.find(x=>x.id===drag.id);if(f){const a=-(f.rot||0)*Math.PI/180,dx=p.x-f.x,dy=p.y-f.y;const lx=Math.abs(dx*Math.cos(a)-dy*Math.sin(a)),ly=Math.abs(dx*Math.sin(a)+dy*Math.cos(a));f.w=Math.max(15,Math.round(lx*2));f.h=Math.max(15,Math.round(ly*2));render()}return}
   const r=PLAN.rooms.find(x=>x.id===drag.id);if(!r)return;
   if(drag.mode==='move'){r.x=Math.round(p.x-drag.dx);r.y=Math.round(p.y-drag.dy)}
   else if(drag.mode==='resize'){r.w=Math.max(60,Math.round(p.x-r.x));r.h=Math.max(50,Math.round(p.y-r.y))}
@@ -350,17 +392,45 @@ SVG.addEventListener('pointermove',ev=>{if(!drag)return;const p=svgPt(ev);
 SVG.addEventListener('pointerup',ev=>{if(drag){drag=null;savePlan()}});
 
 function placeAt(p){
+  if(MODE.startsWith('furn:')){const tid=MODE.split(':')[1];const t=(PLAN.templates||[]).find(x=>x.id===tid);
+    PLAN.furniture=PLAN.furniture||[];const f={id:uid(),tpl:tid,name:t?t.name:'Mobile',w:t?t.w:80,h:t?t.h:80,rot:0,x:Math.round(p.x),y:Math.round(p.y)};
+    clampFurn(f);PLAN.furniture.push(f);SELF=f.id;SEL=null;setMode(null);render();savePlan();return;}
   const r=PLAN.rooms.find(x=>x.id===SEL);
   if(!r){setMode(null);alert('Seleziona prima una stanza');return}
   if(MODE.startsWith('door:')){r.doors=r.doors||[];r.doors.push({id:uid(),type:MODE.split(':')[1],x:Math.round(p.x),y:Math.round(p.y)});}
   setMode(null);render();savePlan();
 }
+// ---- mobili: libreria template + istanze ----
+function renderFurnPicker(){let h='<span class="mut">Mobile:</span>';
+  for(const t of (PLAN.templates||[]))h+=`<button class="sec" onclick="pickFurn('${t.id}')">${escapeHtml(t.name)} <small>${t.w}×${t.h}</small></button>`;
+  h+='<button onclick="openTpl()">➕ Nuovo template</button>';$('#furnPicker').innerHTML=h;}
+function startAddFurn(){setMode(null);renderFurnPicker();$('#furnPicker').style.display='flex';}
+function pickFurn(id){$('#furnPicker').style.display='none';setMode('furn:'+id);}
+function openTpl(){$('#furnPicker').style.display='none';$('#tplName').value='';$('#tplW').value='';$('#tplH').value='';$('#tplModal').classList.add('on');}
+function closeTpl(){$('#tplModal').classList.remove('on');}
+function saveTpl(){const n=$('#tplName').value.trim();const w=parseInt($('#tplW').value),h=parseInt($('#tplH').value);
+  if(!n||!(w>0)||!(h>0)){alert('Servono nome e dimensioni valide');return}
+  PLAN.templates=PLAN.templates||[];PLAN.templates.push({id:uid(),name:n,w,h});savePlan();closeTpl();renderFurnPicker();$('#furnPicker').style.display='flex';}
+function renderFurnPanel(){const box=$('#furnPanel');const f=(PLAN.furniture||[]).find(x=>x.id===SELF);if(!f){box.innerHTML='';return}
+  box.innerHTML=`<div class="card"><div class="row" style="justify-content:space-between"><b>🛋️ Mobile</b><button class="sec" onclick="delFurn('${f.id}')">🗑️</button></div>
+    <div class="row" style="margin-top:8px"><span class="mut">Nome</span><input value="${escapeHtml(f.name||'')}" onchange="setFurn('${f.id}','name',this.value)" style="flex:1;min-width:120px"></div>
+    <div class="row" style="margin-top:6px"><span class="mut">L</span><input type="number" value="${f.w}" onchange="setFurn('${f.id}','w',this.value)" style="width:76px"><span class="mut">P</span><input type="number" value="${f.h}" onchange="setFurn('${f.id}','h',this.value)" style="width:76px"><span class="mut">Rot°</span><input type="number" value="${f.rot||0}" onchange="setFurn('${f.id}','rot',this.value)" style="width:76px"></div>
+    <div class="row" style="margin-top:8px"><button class="sec" onclick="furnToTpl('${f.id}')">⭐ Salva come template</button></div></div>`;}
+window.setFurn=(id,k,v)=>{const f=PLAN.furniture.find(x=>x.id===id);if(!f)return;
+  if(k==='name')f.name=v;else{let n=parseInt(v);if(!isNaN(n)){if(k==='rot')f.rot=((n%360)+360)%360;else f[k]=Math.max(10,n)}}
+  render();savePlan();};
+window.delFurn=(id)=>{PLAN.furniture=PLAN.furniture.filter(x=>x.id!==id);SELF=null;render();savePlan();};
+window.furnToTpl=(id)=>{const f=PLAN.furniture.find(x=>x.id===id);if(!f)return;const n=prompt('Nome del template',f.name||'Mobile');if(!n)return;
+  PLAN.templates=PLAN.templates||[];PLAN.templates.push({id:uid(),name:n.trim(),w:f.w,h:f.h});savePlan();alert('Template salvato: '+n.trim());};
 function startAddDoor(){
   if(!SEL){alert('Seleziona prima una stanza');return}
   $('#doorPicker').style.display='flex';
 }
 function pickDoor(t){$('#doorPicker').style.display='none';setMode('door:'+t);}
-function setMode(m){MODE=m;$('#mode').textContent=m?('Tocca sul piano per posizionare: '+m.replace('door:','porta ')):'';if(!m){$('#doorPicker').style.display='none';$('#roomPicker').style.display='none';$('#drawBtns').style.display='none'}}
+function setMode(m){MODE=m;
+  let t='';if(m&&m.startsWith('furn:'))t='Tocca sul piano per posizionare il mobile';else if(m)t='Tocca sul piano per posizionare: '+m.replace('door:','porta ');
+  $('#mode').textContent=t;
+  if(!m){$('#doorPicker').style.display='none';$('#roomPicker').style.display='none';$('#drawBtns').style.display='none';$('#furnPicker').style.display='none'}}
 
 // ---- disegno stanza poligonale ----
 function startDrawRoom(){setMode(null);MODE='draw';DRAWPTS=[];SEL=null;$('#roomPicker').style.display='none';$('#doorPicker').style.display='none';$('#drawBtns').style.display='flex';$('#mode').textContent='Disegna: tocca i vertici, poi "Chiudi forma"';render();}
