@@ -109,10 +109,11 @@ def get_model(fn: str):
     if not os.path.exists(p): raise HTTPException(404,"not found")
     return FileResponse(p)
 
-@app.get("/vendor/model-viewer.min.js")
-def get_mv():
-    p = os.path.join(VENDOR, "model-viewer.min.js")
-    if not os.path.exists(p): raise HTTPException(404,"libreria 3D non inclusa nel build")
+@app.get("/vendor/{fn}")
+def get_vendor(fn: str):
+    if not fn.endswith(".js"): raise HTTPException(404,"not found")
+    p = os.path.join(VENDOR, os.path.basename(fn))
+    if not os.path.exists(p): raise HTTPException(404,"libreria non inclusa nel build")
     return FileResponse(p, media_type="text/javascript")
 
 @app.get("/", response_class=HTMLResponse)
@@ -164,6 +165,7 @@ model-viewer{--poster-color:transparent}
       <button class="sec" id="addWinBtn" onclick="startAddWindow()">🪟 Finestra</button>
       <button class="sec" id="addDoorBtn" onclick="startAddDoor()">🚪 Porta</button>
       <button class="sec" onclick="startAddFurn()">🛋️ Mobile</button>
+      <button class="sec" onclick="openHouse3D()">🏠 Casa 3D</button>
     </div>
     <span class="mut" id="mode"></span>
   </div>
@@ -213,6 +215,16 @@ model-viewer{--poster-color:transparent}
   <div class="row" style="margin-top:8px"><label class="sec" style="padding:9px;border:1px solid var(--bd);border-radius:8px;cursor:pointer">🧊 Modello 3D (.glb) opz.<input id="tplModel" type="file" accept=".glb,.gltf,model/gltf-binary" style="display:none" onchange="tplModelPick(this)"></label><span id="tplModelName" class="mut"></span></div>
   <div class="mut" style="margin-top:4px">Esporta da Blender in glTF 2.0 (.glb), senza compressione Draco per il 3D offline.</div>
   <div class="row" style="justify-content:flex-end;margin-top:10px"><button class="sec" onclick="closeTpl()">Annulla</button><button onclick="saveTpl()">💾 Salva template</button></div>
+</div></div>
+
+<!-- MODAL: casa in 3D -->
+<div id="house3dModal" class="modal"><div class="modalcard" style="max-width:960px;width:96vw">
+  <div class="row" style="justify-content:space-between;flex-wrap:nowrap">
+    <b>🏠 Casa in 3D</b>
+    <div class="row"><span class="mut">Muri</span><input id="h3h" type="range" min="150" max="400" value="250" oninput="setH3Height(this.value)" style="width:110px"><button class="sec" onclick="closeHouse3D()">✖️ Chiudi</button></div>
+  </div>
+  <div id="house3dBox" style="margin-top:8px;height:72vh;background:#0b0f14;border-radius:8px;overflow:hidden"></div>
+  <div id="house3dInfo" class="mut" style="margin-top:6px"></div>
 </div></div>
 
 <!-- MODAL: vista 3D a schermo intero -->
@@ -617,6 +629,74 @@ async function saveWindow(){
   room.windows.push({id:uid(),name:$('#wName').value.trim(),azimuth:LOCKED,photo_az:LOCKED,photo:photo,photo_fov:fov,alt_min:0,
     photo_alt:(LOCKEDALT!=null?LOCKEDALT:0),x:c.x,y:c.y});
   SEL=roomId;closeWin();render();savePlan();
+}
+// ================= CASA IN 3D (three.js) =================
+let THREEREADY=false, H3={}, HHEIGHT=250;
+const CX3=500, CZ3=320, WT3=8, DW3=46, WW3=66, SILL3=90, WHEAD3=210; // costanti piano→3D
+function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error(src));document.head.appendChild(s)})}
+async function ensureThree(){if(THREEREADY)return;await loadScript('vendor/three.min.js');await loadScript('vendor/GLTFLoader.js');await loadScript('vendor/OrbitControls.js');THREEREADY=true;}
+function roomPts(r){return (r.poly&&r.poly.length>=3)?r.poly:[[r.x,r.y],[r.x+r.w,r.y],[r.x+r.w,r.y+r.h],[r.x,r.y+r.h]];}
+function projOnSeg(p,a,b){const dx=b[0]-a[0],dy=b[1]-a[1],L2=dx*dx+dy*dy||1;let t=((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L2;t=Math.max(0,Math.min(1,t));const px=a[0]+t*dx,py=a[1]+t*dy;return {d:t*Math.sqrt(L2),len:Math.sqrt(L2),dist:Math.hypot(p[0]-px,p[1]-py)};}
+async function openHouse3D(){$('#house3dModal').classList.add('on');const box=$('#house3dBox');box.innerHTML='<div class="mut" style="padding:20px">Carico il motore 3D…</div>';
+  try{await ensureThree()}catch(e){box.innerHTML='<span class="bad" style="padding:20px;display:block">Impossibile caricare il motore 3D (vendor mancante).</span>';return}
+  buildHouse3D();}
+function closeHouse3D(){H3.run=false;if(H3.animId)cancelAnimationFrame(H3.animId);if(H3.onResize)removeEventListener('resize',H3.onResize);if(H3.renderer){try{H3.renderer.dispose();H3.renderer.forceContextLoss&&H3.renderer.forceContextLoss()}catch(e){}}H3={};$('#house3dBox').innerHTML='';$('#house3dModal').classList.remove('on');}
+window.setH3Height=(v)=>{HHEIGHT=+v;if(H3.run)buildHouse3D();};
+function buildHouse3D(){
+  H3.run=false;if(H3.animId)cancelAnimationFrame(H3.animId);
+  const box=$('#house3dBox');box.innerHTML='';
+  const W=box.clientWidth||800, Hh=box.clientHeight||500;
+  const scene=new THREE.Scene();scene.background=new THREE.Color(0x0b0f14);
+  const grp=new THREE.Group();scene.add(grp);
+  scene.add(new THREE.HemisphereLight(0xffffff,0x30363d,0.95));
+  const dl=new THREE.DirectionalLight(0xffffff,0.7);dl.position.set(250,450,180);scene.add(dl);
+  grp.add(new THREE.GridHelper(1200,24,0x223047,0x1a2130));
+  const wallMat=new THREE.MeshStandardMaterial({color:0x9aa4b0,roughness:.95,metalness:0,side:THREE.DoubleSide});
+  const H=HHEIGHT;
+  function wallBox(p0,p1,y0,y1){const ax=p0[0]-CX3,az=p0[1]-CZ3,bx=p1[0]-CX3,bz=p1[1]-CZ3;const len=Math.hypot(bx-ax,bz-az);if(len<0.6||y1-y0<0.6)return;
+    const m=new THREE.Mesh(new THREE.BoxGeometry(len,y1-y0,WT3),wallMat);m.position.set((ax+bx)/2,(y0+y1)/2,(az+bz)/2);m.rotation.y=-Math.atan2(bz-az,bx-ax);grp.add(m);}
+  let nRooms=0,nWin=0,nDoor=0,nFurn=0;
+  for(const r of (PLAN.rooms||[])){nRooms++;const pts=roomPts(r);const ext=isExt(r);
+    // pavimento
+    const shape=new THREE.Shape(pts.map(p=>new THREE.Vector2(p[0]-CX3,-(p[1]-CZ3))));
+    const fgeo=new THREE.ShapeGeometry(shape);fgeo.rotateX(-Math.PI/2);
+    grp.add(new THREE.Mesh(fgeo,new THREE.MeshStandardMaterial({color:ext?0x1c3b2a:0x18314f,roughness:1,side:THREE.DoubleSide})));
+    // assegna aperture (porte/finestre) al lato più vicino
+    const es=[];for(let i=0;i<pts.length;i++)es.push([pts[i],pts[(i+1)%pts.length]]);
+    const byEdge=es.map(()=>[]);
+    const cen=roomCenter(r);
+    for(const d of (r.doors||[])){let bi=0,bd=1e9,bp=0,bl=0;es.forEach((e,i)=>{const pr=projOnSeg([d.x,d.y],e[0],e[1]);if(pr.dist<bd){bd=pr.dist;bi=i;bp=pr.d;bl=pr.len}});byEdge[bi].push({d:bp,len:bl,type:'door'});nDoor++;}
+    for(const w of (r.windows||[])){const wx=w.x!=null?w.x:cen.x,wy=w.y!=null?w.y:cen.y;let bi=0,bd=1e9,bp=0,bl=0;es.forEach((e,i)=>{const pr=projOnSeg([wx,wy],e[0],e[1]);if(pr.dist<bd){bd=pr.dist;bi=i;bp=pr.d;bl=pr.len}});byEdge[bi].push({d:bp,len:bl,type:'window'});nWin++;}
+    // muri con vani
+    es.forEach((e,i)=>{const a=e[0],b=e[1];const L=Math.hypot(b[0]-a[0],b[1]-a[1]);if(L<1)return;const ux=(b[0]-a[0])/L,uy=(b[1]-a[1])/L;const pAt=dd=>[a[0]+ux*dd,a[1]+uy*dd];
+      const ops=byEdge[i].slice().sort((x,y)=>x.d-y.d);let cur=0;
+      for(const op of ops){const half=(op.type==='window'?WW3:DW3)/2;const s=op.d-half,e2=op.d+half;
+        if(s>cur)wallBox(pAt(cur),pAt(Math.max(cur,s)),0,H);
+        const q0=pAt(Math.max(0,s)),q1=pAt(Math.min(L,e2));
+        if(op.type==='window'){wallBox(q0,q1,0,SILL3);wallBox(q0,q1,Math.min(WHEAD3,H),H);}
+        cur=Math.max(cur,e2);}
+      if(cur<L)wallBox(pAt(cur),pAt(L),0,H);
+    });
+  }
+  // mobili con modello .glb (gli altri sono nascosti per scelta)
+  const loader=new THREE.GLTFLoader();
+  for(const f of (PLAN.furniture||[])){const t=(PLAN.templates||[]).find(x=>x.id===f.tpl);if(!t||!t.model)continue;nFurn++;
+    loader.load('models/'+t.model,(gltf)=>{const obj=gltf.scene;const b=new THREE.Box3().setFromObject(obj);const sz=b.getSize(new THREE.Vector3());
+      const sc=Math.min((f.w||t.w)/(sz.x||1),(f.h||t.h)/(sz.z||1));obj.scale.setScalar(sc);
+      const b2=new THREE.Box3().setFromObject(obj);const c2=b2.getCenter(new THREE.Vector3());
+      obj.position.x-=c2.x;obj.position.z-=c2.z;obj.position.y-=b2.min.y;
+      const piv=new THREE.Group();piv.add(obj);piv.position.set(f.x-CX3,0,f.y-CZ3);piv.rotation.y=-(f.rot||0)*Math.PI/180;grp.add(piv);
+    },undefined,(err)=>{console.warn('glb load fail',t.model,err)});
+  }
+  // camera + controlli
+  const cam=new THREE.PerspectiveCamera(55,W/Hh,1,6000);cam.position.set(0,H*2.6,760);
+  const rnd=new THREE.WebGLRenderer({antialias:true});rnd.setPixelRatio(Math.min(devicePixelRatio,2));rnd.setSize(W,Hh);box.appendChild(rnd.domElement);
+  const ctrl=new THREE.OrbitControls(cam,rnd.domElement);ctrl.target.set(0,40,0);ctrl.enableDamping=true;ctrl.update();
+  const onResize=()=>{const w2=box.clientWidth,h2=box.clientHeight;if(!w2||!h2)return;cam.aspect=w2/h2;cam.updateProjectionMatrix();rnd.setSize(w2,h2)};
+  addEventListener('resize',onResize);
+  $('#house3dInfo').textContent=`${nRooms} stanze · ${nWin} finestre · ${nDoor} porte · ${nFurn} mobili 3D`+((nFurn===0)?' (nessun mobile ha un modello .glb)':'');
+  H3={run:true,renderer:rnd,controls:ctrl,onResize};
+  (function loop(){if(!H3.run)return;H3.animId=requestAnimationFrame(loop);ctrl.update();rnd.render(scene,cam)})();
 }
 boot();
 </script></body></html>"""
