@@ -1,5 +1,5 @@
 name: Eclipse Finder
-version: "0.10.0"
+version: "0.11.0"
 slug: eclipse_finder
 description: Prevede la prossima eclissi e da quale finestra/balcone di casa si vede meglio, con overlay sulla foto della vista
 arch:

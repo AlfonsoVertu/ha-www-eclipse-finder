@@ -166,6 +166,7 @@ model-viewer{--poster-color:transparent}
       <button class="sec" id="addDoorBtn" onclick="startAddDoor()">🚪 Porta</button>
       <button class="sec" onclick="startAddFurn()">🛋️ Mobile</button>
       <button class="sec" onclick="openHouse3D()">🏠 Casa 3D</button>
+      <button class="sec" onclick="toggleExport()">⬇️ Esporta</button>
     </div>
     <span class="mut" id="mode"></span>
   </div>
@@ -199,6 +200,12 @@ model-viewer{--poster-color:transparent}
     <button class="sec" onclick="pickDoor('principale')">🏠 principale</button>
   </div>
   <div id="furnPicker" class="row" style="display:none;margin:6px 0"></div>
+  <div id="exportPicker" class="row" style="display:none;margin:6px 0">
+    <span class="mut">Esporta planimetria 2D:</span>
+    <button class="sec" onclick="exportPNG()">🖼️ PNG</button>
+    <button class="sec" onclick="exportSVG()">▦ SVG</button>
+    <span class="mut">· il 3D (.glb) si esporta dalla vista 🏠 Casa 3D</span>
+  </div>
   <div id="planwrap"><svg id="plan" width="100%" viewBox="0 0 1000 640" style="display:block"></svg></div>
   <div id="sel" class="mut" style="margin-top:8px">Tocca una stanza per selezionarla. Trascina per spostare, maniglia ◢ per ridimensionare. Stanze disegnate: trascina i vertici ◆. Usa ✏️ Disegna per forme non rettangolari.</div>
 </div>
@@ -221,7 +228,7 @@ model-viewer{--poster-color:transparent}
 <div id="house3dModal" class="modal"><div class="modalcard" style="max-width:960px;width:96vw">
   <div class="row" style="justify-content:space-between;flex-wrap:nowrap">
     <b>🏠 Casa in 3D</b>
-    <div class="row"><span class="mut">Muri</span><input id="h3h" type="range" min="150" max="400" value="250" oninput="setH3Height(this.value)" style="width:110px"><button class="sec" onclick="closeHouse3D()">✖️ Chiudi</button></div>
+    <div class="row"><span class="mut">Muri</span><input id="h3h" type="range" min="150" max="400" value="250" oninput="setH3Height(this.value)" style="width:100px"><button class="sec" onclick="exportGLB()">⬇️ .glb</button><button class="sec" onclick="closeHouse3D()">✖️ Chiudi</button></div>
   </div>
   <div id="house3dBox" style="margin-top:8px;height:72vh;background:#0b0f14;border-radius:8px;overflow:hidden"></div>
   <div id="house3dInfo" class="mut" style="margin-top:6px"></div>
@@ -634,7 +641,7 @@ async function saveWindow(){
 let THREEREADY=false, H3={}, HHEIGHT=250;
 const CX3=500, CZ3=320, WT3=8, DW3=46, WW3=66, SILL3=90, WHEAD3=210; // costanti piano→3D
 function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error(src));document.head.appendChild(s)})}
-async function ensureThree(){if(THREEREADY)return;await loadScript('vendor/three.min.js');await loadScript('vendor/GLTFLoader.js');await loadScript('vendor/OrbitControls.js');THREEREADY=true;}
+async function ensureThree(){if(THREEREADY)return;await loadScript('vendor/three.min.js');await loadScript('vendor/GLTFLoader.js');await loadScript('vendor/OrbitControls.js');await loadScript('vendor/GLTFExporter.js');THREEREADY=true;}
 function roomPts(r){return (r.poly&&r.poly.length>=3)?r.poly:[[r.x,r.y],[r.x+r.w,r.y],[r.x+r.w,r.y+r.h],[r.x,r.y+r.h]];}
 function projOnSeg(p,a,b){const dx=b[0]-a[0],dy=b[1]-a[1],L2=dx*dx+dy*dy||1;let t=((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L2;t=Math.max(0,Math.min(1,t));const px=a[0]+t*dx,py=a[1]+t*dy;return {d:t*Math.sqrt(L2),len:Math.sqrt(L2),dist:Math.hypot(p[0]-px,p[1]-py)};}
 async function openHouse3D(){$('#house3dModal').classList.add('on');const box=$('#house3dBox');box.innerHTML='<div class="mut" style="padding:20px">Carico il motore 3D…</div>';
@@ -695,9 +702,28 @@ function buildHouse3D(){
   const onResize=()=>{const w2=box.clientWidth,h2=box.clientHeight;if(!w2||!h2)return;cam.aspect=w2/h2;cam.updateProjectionMatrix();rnd.setSize(w2,h2)};
   addEventListener('resize',onResize);
   $('#house3dInfo').textContent=`${nRooms} stanze · ${nWin} finestre · ${nDoor} porte · ${nFurn} mobili 3D`+((nFurn===0)?' (nessun mobile ha un modello .glb)':'');
-  H3={run:true,renderer:rnd,controls:ctrl,onResize};
+  H3={run:true,renderer:rnd,controls:ctrl,onResize,scene,grp};
   (function loop(){if(!H3.run)return;H3.animId=requestAnimationFrame(loop);ctrl.update();rnd.render(scene,cam)})();
 }
+function exportGLB(){if(!H3.grp){alert('Apri prima la vista 3D');return}
+  try{const ex=new THREE.GLTFExporter();ex.parse(H3.grp,(res)=>{downloadBlob(new Blob([res],{type:'model/gltf-binary'}),'casa.glb');},{binary:true});}
+  catch(e){alert('Export 3D non riuscito');}
+}
+
+// ================= EXPORT 2D (PNG / SVG) =================
+const EXPORT_VARS='--bg:#0d1117;--card:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;--acc:#f0a500;--ok:#3fb950;--bad:#f85149;--d-int:#58a6ff;--d-bal:#3fb950;--d-est:#d29922;--d-main:#f85149';
+function toggleExport(){const el=$('#exportPicker');el.style.display=el.style.display==='flex'?'none':'flex';}
+function downloadBlob(blob,name){const u=URL.createObjectURL(blob);const a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),3000);}
+function planSVGString(){const clone=SVG.cloneNode(true);
+  clone.setAttribute('xmlns','http://www.w3.org/2000/svg');clone.setAttribute('width','1000');clone.setAttribute('height','640');clone.removeAttribute('style');
+  clone.setAttribute('style',EXPORT_VARS+';background:#0b0f14');
+  return '<?xml version="1.0" encoding="UTF-8"?>\n'+new XMLSerializer().serializeToString(clone);}
+function exportSVG(){downloadBlob(new Blob([planSVGString()],{type:'image/svg+xml'}),'planimetria.svg');}
+function exportPNG(){const data=planSVGString();const img=new Image();
+  img.onload=()=>{const c=document.createElement('canvas');c.width=2000;c.height=1280;const ctx=c.getContext('2d');ctx.fillStyle='#0b0f14';ctx.fillRect(0,0,c.width,c.height);ctx.drawImage(img,0,0,c.width,c.height);
+    c.toBlob(b=>{if(b)downloadBlob(b,'planimetria.png');else alert('PNG non riuscito')},'image/png');};
+  img.onerror=()=>alert('PNG non riuscito');
+  img.src='data:image/svg+xml;base64,'+btoa(unescape(encodeURIComponent(data)));}
 boot();
 </script></body></html>"""
 
