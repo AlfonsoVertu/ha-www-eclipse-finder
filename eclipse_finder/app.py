@@ -136,6 +136,7 @@ svg text{user-select:none}
   <div class="row" style="justify-content:space-between">
     <div class="row">
       <button onclick="startAddRoom()">➕ Stanza</button>
+      <button class="sec" onclick="startDrawRoom()">✏️ Disegna</button>
       <button class="sec" id="addWinBtn" onclick="startAddWindow()">🪟 Finestra</button>
       <button class="sec" id="addDoorBtn" onclick="startAddDoor()">🚪 Porta</button>
     </div>
@@ -157,6 +158,12 @@ svg text{user-select:none}
     <button class="sec" onclick="pickRoom('terrazzo')">☀️ terrazzo</button>
     <button class="sec" onclick="pickRoom('giardino')">🌳 giardino</button>
   </div>
+  <div id="drawBtns" class="row" style="display:none;margin:6px 0">
+    <span class="mut">Disegno stanza — tocca i vertici:</span>
+    <button onclick="finishDraw()">✔️ Chiudi forma</button>
+    <button class="sec" onclick="undoDraw()">↶ Annulla punto</button>
+    <button class="sec" onclick="cancelDraw()">✖️ Esci</button>
+  </div>
   <div id="doorPicker" class="row" style="display:none;margin:6px 0">
     <span class="mut">Tipo porta:</span>
     <button class="sec" onclick="pickDoor('interna')">🚪 interna</button>
@@ -165,7 +172,7 @@ svg text{user-select:none}
     <button class="sec" onclick="pickDoor('principale')">🏠 principale</button>
   </div>
   <div id="planwrap"><svg id="plan" width="100%" viewBox="0 0 1000 640" style="display:block"></svg></div>
-  <div id="sel" class="mut" style="margin-top:8px">Tocca una stanza per selezionarla. Trascina per spostare, usa la maniglia ◢ per ridimensionare.</div>
+  <div id="sel" class="mut" style="margin-top:8px">Tocca una stanza per selezionarla. Trascina per spostare, maniglia ◢ per ridimensionare. Stanze disegnate: trascina i vertici ◆. Usa ✏️ Disegna per forme non rettangolari.</div>
 </div>
 
 <div id="roomPanel"></div>
@@ -196,6 +203,8 @@ svg text{user-select:none}
   <div class="step" data-s="4"><div class="mut" style="margin:8px 0">Foto della vista (opzionale)</div>
     <label class="sec" style="padding:10px;border:1px solid var(--bd);border-radius:8px;cursor:pointer;display:inline-block">📷 Scatta/scegli<input id="wPhoto" type="file" accept="image/*" capture="environment" style="display:none" onchange="wPhotoPick(this)"></label>
     <span id="wPname" class="mut"></span><div id="wPrev"></div>
+    <div class="row" style="margin-top:8px"><span class="mut">Campo visivo orizz.:</span><input id="wFov" type="number" min="20" max="140" value="66" style="width:80px"><span class="mut">°</span></div>
+    <div id="wFovHint" class="mut" style="margin-top:4px"></div>
     <div class="row" style="justify-content:space-between;margin-top:10px"><button class="sec" onclick="winStep(3)">←</button><button id="wSave" onclick="saveWindow()">💾 Salva finestra</button></div>
   </div>
 </div></div>
@@ -203,8 +212,9 @@ svg text{user-select:none}
 <script>
 const $=s=>document.querySelector(s);
 let ECL=null, PLAN={rooms:[]}, LIVE=null, LOCKED=null, WPHOTO=null, LIVEPITCH=null, LOCKEDALT=null;
-let MODE=null; // 'door:<type>' | 'window' placement
+let MODE=null; // 'door:<type>' | 'draw' | placement
 let SEL=null;  // selected room id
+let DRAWPTS=[]; // vertici della stanza in disegno
 const DCOL={interna:'var(--d-int)',balcone:'var(--d-bal)',esterna:'var(--d-est)',principale:'var(--d-main)'};
 const ROOM_EMO={interna:'🏠',balcone:'🌿',terrazzo:'☀️',giardino:'🌳'};
 function isExt(r){return r&&r.kind==='esterna'}
@@ -240,7 +250,16 @@ async function boot(){
 
 // ---------- Planimetria ----------
 const SVG=$('#plan');
-function clampRoom(r){r.w=Math.max(60,Math.min(1000,r.w));r.h=Math.max(50,Math.min(640,r.h));r.x=Math.max(0,Math.min(1000-r.w,Math.round(r.x)));r.y=Math.max(0,Math.min(640-r.h,Math.round(r.y)));}
+function clampRoom(r){
+  if(r.poly&&r.poly.length){r.poly=r.poly.map(pt=>[Math.max(0,Math.min(1000,Math.round(pt[0]))),Math.max(0,Math.min(640,Math.round(pt[1])))]);return}
+  r.w=Math.max(60,Math.min(1000,r.w));r.h=Math.max(50,Math.min(640,r.h));r.x=Math.max(0,Math.min(1000-r.w,Math.round(r.x)));r.y=Math.max(0,Math.min(640-r.h,Math.round(r.y)));
+}
+function roomBBox(r){if(r.poly&&r.poly.length){const xs=r.poly.map(p=>p[0]),ys=r.poly.map(p=>p[1]);const x=Math.min(...xs),y=Math.min(...ys);return{x,y,w:Math.max(...xs)-x,h:Math.max(...ys)-y}}return{x:r.x,y:r.y,w:r.w,h:r.h}}
+function roomCenter(r){const b=roomBBox(r);return{x:Math.round(b.x+b.w/2),y:Math.round(b.y+b.h/2)}}
+function pointInRoom(r,p){
+  if(r.poly&&r.poly.length>=3){let inside=false,q=r.poly;for(let i=0,j=q.length-1;i<q.length;j=i++){const xi=q[i][0],yi=q[i][1],xj=q[j][0],yj=q[j][1];if(((yi>p.y)!==(yj>p.y))&&(p.x<(xj-xi)*(p.y-yi)/(yj-yi)+xi))inside=!inside}return inside}
+  return p.x>=r.x&&p.x<=r.x+r.w&&p.y>=r.y&&p.y<=r.y+r.h;
+}
 function svgPt(evt){const r=SVG.getBoundingClientRect();const x=(evt.clientX-r.left)/r.width*1000;const y=(evt.clientY-r.top)/r.height*640;return {x,y}}
 function eclArrow(){ // freccia direzione eclissi dal centro
   let e=null;for(const k of['solar','lunar']){if(ECL&&ECL[k]&&ECL[k].visible){e=ECL[k];break}}
@@ -260,23 +279,34 @@ function render(){
   for(const r of PLAN.rooms){
     const selcol=r.id===SEL?'var(--acc)':'#3b4552';const ext=isExt(r);
     const fill=ext?'rgba(63,185,80,.09)':'rgba(88,166,255,.08)';
-    const dash=ext?' stroke-dasharray="8 5"':'';
-    s+=`<g data-room="${r.id}">
-      <rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="6" fill="${fill}" stroke="${selcol}" stroke-width="${r.id===SEL?3:1.5}"${dash}/>
-      <text x="${r.x+8}" y="${r.y+20}" fill="var(--fg)" font-size="15" font-weight="700">${roomEmo(r)} ${escapeHtml(r.name||'Stanza')}</text>`;
+    const dash=ext?' stroke-dasharray="8 5"':'';const b=roomBBox(r);const sw=r.id===SEL?3:1.5;
+    s+=`<g data-room="${r.id}">`;
+    if(r.poly&&r.poly.length>=3){const pts=r.poly.map(p=>p[0]+','+p[1]).join(' ');
+      s+=`<polygon points="${pts}" fill="${fill}" stroke="${selcol}" stroke-width="${sw}"${dash}/>`;}
+    else s+=`<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="6" fill="${fill}" stroke="${selcol}" stroke-width="${sw}"${dash}/>`;
+    s+=`<text x="${b.x+8}" y="${b.y+20}" fill="var(--fg)" font-size="15" font-weight="700">${roomEmo(r)} ${escapeHtml(r.name||'Stanza')}</text>`;
     // porte
     for(const d of (r.doors||[])) s+=`<rect x="${d.x-7}" y="${d.y-7}" width="14" height="14" rx="3" fill="${DCOL[d.type]||'#888'}" stroke="#0b0f14"/>`;
     // finestre / punti di osservazione (marker + freccia azimut)
-    for(const w of (r.windows||[])){const wx=w.x!=null?w.x:r.x+r.w/2, wy=w.y!=null?w.y:r.y+r.h/2;
+    const c=roomCenter(r);
+    for(const w of (r.windows||[])){const wx=w.x!=null?w.x:c.x, wy=w.y!=null?w.y:c.y;
       const [ax,ay]=polar(wx,wy,26,w.azimuth);
       const inview=eclInView(w);
       s+=`<line x1="${wx}" y1="${wy}" x2="${ax}" y2="${ay}" stroke="${inview?'#ffd24a':'#8b949e'}" stroke-width="2" marker-end="url(#arrow)"/>`;
       if(ext)s+=`<rect x="${wx-6}" y="${wy-6}" width="12" height="12" transform="rotate(45 ${wx} ${wy})" fill="#3fb950" stroke="${inview?'#f0a500':'#0b0f14'}" stroke-width="2"/>`;
       else s+=`<circle cx="${wx}" cy="${wy}" r="6" fill="#e6edf3" stroke="${inview?'#f0a500':'#30363d'}" stroke-width="2"/>`;}
-    // maniglia resize
-    if(r.id===SEL)s+=`<rect data-resize="${r.id}" x="${r.x+r.w-9}" y="${r.y+r.h-9}" width="18" height="18" fill="var(--acc)" rx="3" style="cursor:nwse-resize"/>`;
+    // maniglie: vertici (poligono) o resize (rettangolo)
+    if(r.id===SEL){
+      if(r.poly&&r.poly.length)for(let vi=0;vi<r.poly.length;vi++){const v=r.poly[vi];
+        s+=`<rect data-vert="${r.id}:${vi}" x="${v[0]-7}" y="${v[1]-7}" width="14" height="14" fill="var(--acc)" rx="3" transform="rotate(45 ${v[0]} ${v[1]})" style="cursor:move"/>`;}
+      else s+=`<rect data-resize="${r.id}" x="${b.x+b.w-9}" y="${b.y+b.h-9}" width="18" height="18" fill="var(--acc)" rx="3" style="cursor:nwse-resize"/>`;
+    }
     s+=`</g>`;
   }
+  // forma in disegno
+  if(MODE==='draw'&&DRAWPTS.length){const pts=DRAWPTS.map(p=>p[0]+','+p[1]).join(' ');
+    s+=`<polyline points="${pts}" fill="rgba(240,165,0,.10)" stroke="var(--acc)" stroke-width="2" stroke-dasharray="6 4"/>`;
+    for(const v of DRAWPTS)s+=`<circle cx="${v[0]}" cy="${v[1]}" r="5" fill="var(--acc)"/>`;}
   s+=eclArrow();
   SVG.innerHTML=s;
   renderRoomPanel();
@@ -288,23 +318,31 @@ function eclInView(w){for(const k of['solar','lunar']){const e=ECL&&ECL[k];if(!e
 let drag=null;
 SVG.addEventListener('pointerdown',ev=>{
   const p=svgPt(ev);
+  if(MODE==='draw'){DRAWPTS.push([Math.round(p.x),Math.round(p.y)]);render();return}
   if(MODE){placeAt(p);return}
+  const vt=ev.target.getAttribute&&ev.target.getAttribute('data-vert');
+  if(vt){const a=vt.split(':');drag={mode:'vertmove',id:a[0],vi:+a[1]};SVG.setPointerCapture(ev.pointerId);return}
   const rz=ev.target.getAttribute&&ev.target.getAttribute('data-resize');
   if(rz){drag={id:rz,mode:'resize'};SVG.setPointerCapture(ev.pointerId);return}
   // hit-test finestre/porte (trascinabili) prima delle stanze
-  for(const r of PLAN.rooms){
-    for(const w of (r.windows||[])){const wx=w.x!=null?w.x:r.x+r.w/2, wy=w.y!=null?w.y:r.y+r.h/2;
+  for(const r of PLAN.rooms){const c=roomCenter(r);
+    for(const w of (r.windows||[])){const wx=w.x!=null?w.x:c.x, wy=w.y!=null?w.y:c.y;
       if(Math.hypot(p.x-wx,p.y-wy)<14){SEL=r.id;drag={mode:'winmove',roomId:r.id,eid:w.id};SVG.setPointerCapture(ev.pointerId);render();return}}
     for(const d of (r.doors||[])){if(Math.hypot(p.x-d.x,p.y-d.y)<12){SEL=r.id;drag={mode:'doormove',roomId:r.id,eid:d.id};SVG.setPointerCapture(ev.pointerId);render();return}}
   }
   // trova stanza sotto il punto (dall'alto)
-  let hit=null;for(let i=PLAN.rooms.length-1;i>=0;i--){const r=PLAN.rooms[i];if(p.x>=r.x&&p.x<=r.x+r.w&&p.y>=r.y&&p.y<=r.y+r.h){hit=r;break}}
-  if(hit){SEL=hit.id;drag={id:hit.id,mode:'move',dx:p.x-hit.x,dy:p.y-hit.y};SVG.setPointerCapture(ev.pointerId);render();}
+  let hit=null;for(let i=PLAN.rooms.length-1;i>=0;i--){if(pointInRoom(PLAN.rooms[i],p)){hit=PLAN.rooms[i];break}}
+  if(hit){SEL=hit.id;
+    if(hit.poly&&hit.poly.length)drag={id:hit.id,mode:'polymove',sx:p.x,sy:p.y,orig:hit.poly.map(v=>[v[0],v[1]])};
+    else drag={id:hit.id,mode:'move',dx:p.x-hit.x,dy:p.y-hit.y};
+    SVG.setPointerCapture(ev.pointerId);render();}
   else{SEL=null;render();}
 });
 SVG.addEventListener('pointermove',ev=>{if(!drag)return;const p=svgPt(ev);
   if(drag.mode==='winmove'){const r=PLAN.rooms.find(x=>x.id===drag.roomId);const w=r&&r.windows.find(x=>x.id===drag.eid);if(w){w.x=Math.round(p.x);w.y=Math.round(p.y);render()}return}
   if(drag.mode==='doormove'){const r=PLAN.rooms.find(x=>x.id===drag.roomId);const d=r&&r.doors.find(x=>x.id===drag.eid);if(d){d.x=Math.round(p.x);d.y=Math.round(p.y);render()}return}
+  if(drag.mode==='vertmove'){const r=PLAN.rooms.find(x=>x.id===drag.id);if(r&&r.poly){r.poly[drag.vi]=[Math.round(p.x),Math.round(p.y)];clampRoom(r);render()}return}
+  if(drag.mode==='polymove'){const r=PLAN.rooms.find(x=>x.id===drag.id);if(r&&r.poly){const dx=p.x-drag.sx,dy=p.y-drag.sy;r.poly=drag.orig.map(v=>[Math.round(v[0]+dx),Math.round(v[1]+dy)]);clampRoom(r);render()}return}
   const r=PLAN.rooms.find(x=>x.id===drag.id);if(!r)return;
   if(drag.mode==='move'){r.x=Math.round(p.x-drag.dx);r.y=Math.round(p.y-drag.dy)}
   else if(drag.mode==='resize'){r.w=Math.max(60,Math.round(p.x-r.x));r.h=Math.max(50,Math.round(p.y-r.y))}
@@ -322,9 +360,17 @@ function startAddDoor(){
   $('#doorPicker').style.display='flex';
 }
 function pickDoor(t){$('#doorPicker').style.display='none';setMode('door:'+t);}
-function setMode(m){MODE=m;$('#mode').textContent=m?('Tocca sul piano per posizionare: '+m.replace('door:','porta ')):'';if(!m){$('#doorPicker').style.display='none';$('#roomPicker').style.display='none'}}
+function setMode(m){MODE=m;$('#mode').textContent=m?('Tocca sul piano per posizionare: '+m.replace('door:','porta ')):'';if(!m){$('#doorPicker').style.display='none';$('#roomPicker').style.display='none';$('#drawBtns').style.display='none'}}
 
-function startAddRoom(){$('#doorPicker').style.display='none';$('#roomPicker').style.display='flex';}
+// ---- disegno stanza poligonale ----
+function startDrawRoom(){setMode(null);MODE='draw';DRAWPTS=[];SEL=null;$('#roomPicker').style.display='none';$('#doorPicker').style.display='none';$('#drawBtns').style.display='flex';$('#mode').textContent='Disegna: tocca i vertici, poi "Chiudi forma"';render();}
+function undoDraw(){if(MODE==='draw'&&DRAWPTS.length){DRAWPTS.pop();render()}}
+function cancelDraw(){MODE=null;DRAWPTS=[];$('#drawBtns').style.display='none';$('#mode').textContent='';render();}
+function finishDraw(){if(DRAWPTS.length<3){alert('Servono almeno 3 vertici');return}
+  const r={id:uid(),name:'Stanza '+(PLAN.rooms.length+1),kind:'interna',subtype:null,poly:DRAWPTS.slice(),windows:[],doors:[]};
+  clampRoom(r);PLAN.rooms.push(r);SEL=r.id;MODE=null;DRAWPTS=[];$('#drawBtns').style.display='none';$('#mode').textContent='';render();savePlan();}
+
+function startAddRoom(){setMode(null);$('#doorPicker').style.display='none';$('#roomPicker').style.display='flex';}
 function pickRoom(t){$('#roomPicker').style.display='none';
   const kind=t==='interna'?'interna':'esterna';const sub=t==='interna'?null:t;
   addRoom(null,kind,sub);
@@ -383,7 +429,7 @@ window.delWin=(rid,wid)=>{const r=PLAN.rooms.find(x=>x.id===rid);if(r){r.windows
 
 // ---------- Wizard finestra ----------
 function startAddWindow(){
-  LOCKED=null;LOCKEDALT=null;LIVEPITCH=null;WPHOTO=null;$('#wS3').disabled=true;$('#wName').value='';$('#wDeg').value='';$('#wAlt').value='';$('#wPname').textContent='';$('#wPrev').innerHTML='';$('#wLive').textContent='—°';$('#wLivec').textContent='';$('#wLiveAlt').textContent='—°';
+  LOCKED=null;LOCKEDALT=null;LIVEPITCH=null;WPHOTO=null;$('#wS3').disabled=true;$('#wName').value='';$('#wDeg').value='';$('#wAlt').value='';$('#wPname').textContent='';$('#wPrev').innerHTML='';$('#wLive').textContent='—°';$('#wLivec').textContent='';$('#wLiveAlt').textContent='—°';$('#wFov').value=66;$('#wFovHint').textContent='';
   const sel=$('#wRoom');sel.innerHTML='';for(const r of PLAN.rooms){const o=document.createElement('option');o.value=r.id;o.textContent=r.name;sel.appendChild(o)}
   if(SEL)sel.value=SEL;$('#wRoomNew').value='';
   updateWinLabels();winStep(1);$('#winModal').classList.add('on');
@@ -399,16 +445,48 @@ function updateWinLabels(){const ext=curWinRoom().kind==='esterna';
 function closeWin(){$('#winModal').classList.remove('on')}
 function winStep(n){document.querySelectorAll('#winModal .step').forEach(s=>s.classList.toggle('on',+s.dataset.s===n));
   if(n===3)$('#wLivec').textContent=LOCKED!=null?compass16(LOCKED)+' '+LOCKED+'°':'';}
+// elevazione dell'asse fotocamera (−z del device) dal suolo, valida in qualsiasi orientamento (portrait/landscape)
+function camAlt(beta,gamma){const b=beta*Math.PI/180,g=gamma*Math.PI/180;let z=-Math.cos(b)*Math.cos(g);z=Math.max(-1,Math.min(1,z));return Math.round(Math.asin(z)*180/Math.PI);}
 function orient(ev){let h=null;if(ev.webkitCompassHeading!=null)h=ev.webkitCompassHeading;else if(ev.absolute&&ev.alpha!=null)h=(360-ev.alpha)%360;
   if(h!=null){LIVE=Math.round(h);$('#wLive').textContent=LIVE+'°';$('#wLivec').textContent=compass16(LIVE)}
-  if(ev.beta!=null){LIVEPITCH=Math.max(-80,Math.min(80,Math.round(ev.beta-90)));const el=$('#wLiveAlt');if(el)el.textContent=LIVEPITCH+'°'}}
+  if(ev.beta!=null){const a=(ev.gamma!=null)?camAlt(ev.beta,ev.gamma):Math.round(ev.beta-90);LIVEPITCH=Math.max(-80,Math.min(80,a));const el=$('#wLiveAlt');if(el)el.textContent=LIVEPITCH+'°'}}
 async function enableCompass(){$('#wcerr').textContent='';try{
   if(typeof DeviceOrientationEvent!=='undefined'&&DeviceOrientationEvent.requestPermission){const p=await DeviceOrientationEvent.requestPermission();if(p!=='granted'){$('#wcerr').innerHTML='<span class="bad">Permesso negato</span>';return}}
   addEventListener('deviceorientationabsolute',orient,true);addEventListener('deviceorientation',orient,true);$('#wLivec').textContent='muovi a "8"…';
 }catch(e){$('#wcerr').innerHTML='<span class="bad">Bussola solo su HTTPS</span>'}}
 function lockHeading(){if(LIVE==null){alert('Attiva la bussola');return}LOCKED=LIVE;LOCKEDALT=(LIVEPITCH!=null?LIVEPITCH:0);$('#wLive').textContent=LOCKED+'° 🔒';$('#wLivec').textContent=compass16(LOCKED)+' · centro '+LOCKEDALT+'°';$('#wS3').disabled=false}
 function useManual(){let v=parseFloat($('#wDeg').value);if(isNaN(v)){alert('Inserisci la direzione 0-360');return}LOCKED=((v%360)+360)%360;let a=parseFloat($('#wAlt').value);LOCKEDALT=isNaN(a)?0:Math.max(-80,Math.min(80,a));$('#wLive').textContent=LOCKED+'° ✍️';$('#wLivec').textContent=compass16(LOCKED)+' (manuale) · centro '+LOCKEDALT+'°';$('#wS3').disabled=false}
-function wPhotoPick(inp){if(!inp.files[0])return;WPHOTO=inp.files[0];$('#wPname').textContent='✓';$('#wPrev').innerHTML='<div class="viewwrap"><img src="'+URL.createObjectURL(WPHOTO)+'"></div>'}
+function readF35(buf){try{
+  const dv=new DataView(buf);if(dv.getUint16(0)!==0xFFD8)return null;
+  let off=2;const len=dv.byteLength;
+  while(off+4<=len){
+    if(dv.getUint8(off)!==0xFF)return null;const marker=dv.getUint8(off+1);
+    if(marker===0xDA)return null; // inizio dati immagine
+    if(marker===0x01||(marker>=0xD0&&marker<=0xD9)){off+=2;continue}
+    const size=dv.getUint16(off+2);
+    if(marker===0xE1){const app1=off+4;
+      if(app1+6<=len&&dv.getUint32(app1)===0x45786966){ // "Exif"
+        const tiff=app1+6;const little=dv.getUint16(tiff)===0x4949;
+        const rd16=o=>dv.getUint16(o,little),rd32=o=>dv.getUint32(o,little);
+        const ifd0=tiff+rd32(tiff+4);
+        const find=(ifd,tag)=>{const n=rd16(ifd);for(let i=0;i<n;i++){const e=ifd+2+i*12;if(rd16(e)===tag)return e}return -1};
+        const ep=find(ifd0,0x8769);if(ep<0)return null;
+        const exif=tiff+rd32(ep+8);const te=find(exif,0xA405);if(te<0)return null; // FocalLengthIn35mmFilm
+        const val=rd16(te+2)===3?rd16(te+8):rd32(te+8);return(val>0&&val<300)?val:null;
+      }}
+    off+=2+size;
+  }
+  return null;
+}catch(e){return null}}
+function wPhotoPick(inp){if(!inp.files[0])return;WPHOTO=inp.files[0];$('#wPname').textContent='✓';
+  const url=URL.createObjectURL(WPHOTO);$('#wPrev').innerHTML='<div class="viewwrap"><img src="'+url+'"></div>';
+  const img=new Image();img.onload=()=>{const land=img.naturalWidth>=img.naturalHeight;
+    (WPHOTO.arrayBuffer?WPHOTO.arrayBuffer():Promise.reject()).then(buf=>{const f35=readF35(buf);
+      if(f35){const sw=land?36:24;const fov=Math.round(2*Math.atan(sw/(2*f35))*180/Math.PI);
+        $('#wFov').value=fov;$('#wFovHint').innerHTML='<span class="mut">FOV stimato da EXIF ('+f35+'mm eq, '+(land?'orizz.':'vert.')+'): '+fov+'° — correggibile</span>';}
+      else $('#wFovHint').innerHTML='<span class="mut">EXIF assente: valore tipico 66° (o correggi a mano)</span>';
+    }).catch(()=>{$('#wFovHint').innerHTML='<span class="mut">EXIF non leggibile: usa 66° o correggi a mano</span>'});
+  };img.src=url;}
 async function saveWindow(){
   let roomId=$('#wRoom').value;const newName=$('#wRoomNew').value.trim();
   if(newName){const r=addRoom(newName);roomId=r.id}
@@ -417,8 +495,9 @@ async function saveWindow(){
   if(!$('#wName').value.trim()||LOCKED==null){alert('Manca nome o direzione');return}
   let photo=null;if(WPHOTO){const fd=new FormData();fd.append('file',WPHOTO);photo=(await (await fetch('api/photo',{method:'POST',body:fd})).json()).photo}
   room.windows=room.windows||[];
-  room.windows.push({id:uid(),name:$('#wName').value.trim(),azimuth:LOCKED,photo_az:LOCKED,photo:photo,photo_fov:66,alt_min:0,
-    photo_alt:(LOCKEDALT!=null?LOCKEDALT:0),x:room.x+room.w/2,y:room.y+room.h/2});
+  const c=roomCenter(room);const fov=Math.max(20,Math.min(140,parseFloat($('#wFov').value)||66));
+  room.windows.push({id:uid(),name:$('#wName').value.trim(),azimuth:LOCKED,photo_az:LOCKED,photo:photo,photo_fov:fov,alt_min:0,
+    photo_alt:(LOCKEDALT!=null?LOCKEDALT:0),x:c.x,y:c.y});
   SEL=roomId;closeWin();render();savePlan();
 }
 boot();
