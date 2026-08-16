@@ -5,6 +5,8 @@ description: Prevede la prossima eclissi e da quale finestra/balcone di casa si 
 arch:
   - amd64
   - aarch64
+  - armv7
+  - i386
 init: false
 ingress: true
 ingress_port: 8099

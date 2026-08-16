@@ -148,6 +148,13 @@ svg text{user-select:none}
     <span><span class="dot" style="background:var(--d-main)"></span>principale</span>
     <span>🪟 finestra</span>
   </div>
+  <div id="doorPicker" class="row" style="display:none;margin:6px 0">
+    <span class="mut">Tipo porta:</span>
+    <button class="sec" onclick="pickDoor('interna')">🚪 interna</button>
+    <button class="sec" onclick="pickDoor('balcone')">🌿 balcone</button>
+    <button class="sec" onclick="pickDoor('esterna')">🚶 esterna</button>
+    <button class="sec" onclick="pickDoor('principale')">🏠 principale</button>
+  </div>
   <div id="planwrap"><svg id="plan" width="100%" viewBox="0 0 1000 640" style="display:block"></svg></div>
   <div id="sel" class="mut" style="margin-top:8px">Tocca una stanza per selezionarla. Trascina per spostare, usa la maniglia ◢ per ridimensionare.</div>
 </div>
@@ -210,11 +217,13 @@ async function boot(){
       <div style="margin-left:auto;text-align:right"><div class="big">${e.altitude}°</div><small>altezza</small></div></div>`;box.appendChild(c);}
   }
   PLAN=await (await fetch('api/plan')).json(); if(!PLAN.rooms)PLAN={rooms:[]};
+  PLAN.rooms.forEach(clampRoom); savePlan(); // recupera stanze finite fuori dal piano
   render();
 }
 
 // ---------- Planimetria ----------
 const SVG=$('#plan');
+function clampRoom(r){r.w=Math.max(60,Math.min(1000,r.w));r.h=Math.max(50,Math.min(640,r.h));r.x=Math.max(0,Math.min(1000-r.w,Math.round(r.x)));r.y=Math.max(0,Math.min(640-r.h,Math.round(r.y)));}
 function svgPt(evt){const r=SVG.getBoundingClientRect();const x=(evt.clientX-r.left)/r.width*1000;const y=(evt.clientY-r.top)/r.height*640;return {x,y}}
 function eclArrow(){ // freccia direzione eclissi dal centro
   let e=null;for(const k of['solar','lunar']){if(ECL&&ECL[k]&&ECL[k].visible){e=ECL[k];break}}
@@ -262,15 +271,24 @@ SVG.addEventListener('pointerdown',ev=>{
   if(MODE){placeAt(p);return}
   const rz=ev.target.getAttribute&&ev.target.getAttribute('data-resize');
   if(rz){drag={id:rz,mode:'resize'};SVG.setPointerCapture(ev.pointerId);return}
+  // hit-test finestre/porte (trascinabili) prima delle stanze
+  for(const r of PLAN.rooms){
+    for(const w of (r.windows||[])){const wx=w.x!=null?w.x:r.x+r.w/2, wy=w.y!=null?w.y:r.y+r.h/2;
+      if(Math.hypot(p.x-wx,p.y-wy)<14){SEL=r.id;drag={mode:'winmove',roomId:r.id,eid:w.id};SVG.setPointerCapture(ev.pointerId);render();return}}
+    for(const d of (r.doors||[])){if(Math.hypot(p.x-d.x,p.y-d.y)<12){SEL=r.id;drag={mode:'doormove',roomId:r.id,eid:d.id};SVG.setPointerCapture(ev.pointerId);render();return}}
+  }
   // trova stanza sotto il punto (dall'alto)
   let hit=null;for(let i=PLAN.rooms.length-1;i>=0;i--){const r=PLAN.rooms[i];if(p.x>=r.x&&p.x<=r.x+r.w&&p.y>=r.y&&p.y<=r.y+r.h){hit=r;break}}
   if(hit){SEL=hit.id;drag={id:hit.id,mode:'move',dx:p.x-hit.x,dy:p.y-hit.y};SVG.setPointerCapture(ev.pointerId);render();}
   else{SEL=null;render();}
 });
-SVG.addEventListener('pointermove',ev=>{if(!drag)return;const p=svgPt(ev);const r=PLAN.rooms.find(x=>x.id===drag.id);if(!r)return;
+SVG.addEventListener('pointermove',ev=>{if(!drag)return;const p=svgPt(ev);
+  if(drag.mode==='winmove'){const r=PLAN.rooms.find(x=>x.id===drag.roomId);const w=r&&r.windows.find(x=>x.id===drag.eid);if(w){w.x=Math.round(p.x);w.y=Math.round(p.y);render()}return}
+  if(drag.mode==='doormove'){const r=PLAN.rooms.find(x=>x.id===drag.roomId);const d=r&&r.doors.find(x=>x.id===drag.eid);if(d){d.x=Math.round(p.x);d.y=Math.round(p.y);render()}return}
+  const r=PLAN.rooms.find(x=>x.id===drag.id);if(!r)return;
   if(drag.mode==='move'){r.x=Math.round(p.x-drag.dx);r.y=Math.round(p.y-drag.dy)}
-  else{r.w=Math.max(60,Math.round(p.x-r.x));r.h=Math.max(50,Math.round(p.y-r.y))}
-  render();});
+  else if(drag.mode==='resize'){r.w=Math.max(60,Math.round(p.x-r.x));r.h=Math.max(50,Math.round(p.y-r.y))}
+  clampRoom(r);render();});
 SVG.addEventListener('pointerup',ev=>{if(drag){drag=null;savePlan()}});
 
 function placeAt(p){
@@ -281,11 +299,10 @@ function placeAt(p){
 }
 function startAddDoor(){
   if(!SEL){alert('Seleziona prima una stanza');return}
-  const t=prompt('Tipo porta: interna / balcone / esterna / principale','interna');
-  if(!t)return;const tt=t.trim().toLowerCase();if(!DCOL[tt]){alert('Tipo non valido');return}
-  setMode('door:'+tt);
+  $('#doorPicker').style.display='flex';
 }
-function setMode(m){MODE=m;$('#mode').textContent=m?('Tocca sul piano per posizionare: '+m.replace('door:','porta ')):'';}
+function pickDoor(t){$('#doorPicker').style.display='none';setMode('door:'+t);}
+function setMode(m){MODE=m;$('#mode').textContent=m?('Tocca sul piano per posizionare: '+m.replace('door:','porta ')):'';if(!m)$('#doorPicker').style.display='none';}
 
 function addRoom(name){
   const r={id:uid(),name:name||('Stanza '+(PLAN.rooms.length+1)),x:120+PLAN.rooms.length*30,y:120+PLAN.rooms.length*24,w:220,h:160,windows:[],doors:[]};
