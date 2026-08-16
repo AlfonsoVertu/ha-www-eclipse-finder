@@ -179,6 +179,7 @@ model-viewer{--poster-color:transparent}
     <span><span class="dot" style="background:var(--d-est)"></span>est</span>
     <span><span class="dot" style="background:var(--d-main)"></span>princ</span>
   </div>
+  <div class="row" style="margin:4px 0"><span class="mut">🧱 Altezza piano (3D):</span><input id="floorH" type="number" min="80" max="600" onchange="setFloorHeight(this.value)" style="width:90px"><span class="mut">unità del piano · usata come altezza muri di default</span></div>
   <div id="roomPicker" class="row" style="display:none;margin:6px 0">
     <span class="mut">Tipo stanza:</span>
     <button class="sec" onclick="pickRoom('interna')">🏠 interna</button>
@@ -315,6 +316,8 @@ async function boot(){
   PLAN=await (await fetch('api/plan')).json(); if(!PLAN.rooms)PLAN={rooms:[]};
   if(!PLAN.templates)PLAN.templates=DEFAULT_TEMPLATES.slice();
   if(!PLAN.furniture)PLAN.furniture=[];
+  if(PLAN.floorHeight==null)PLAN.floorHeight=250;
+  $('#floorH').value=PLAN.floorHeight;$('#h3h').value=PLAN.floorHeight;
   PLAN.rooms.forEach(clampRoom); savePlan(); // recupera stanze finite fuori dal piano
   render();
 }
@@ -521,6 +524,11 @@ function addRoom(name,kind,sub){
 }
 window.setRoomKind=(id,v)=>{const r=PLAN.rooms.find(x=>x.id===id);if(!r)return;
   r.kind=v==='interna'?'interna':'esterna';r.subtype=v==='interna'?null:v;render();savePlan();};
+window.setFloorHeight=(v)=>{let n=parseInt(v);if(isNaN(n))return;PLAN.floorHeight=Math.max(80,Math.min(600,n));
+  $('#floorH').value=PLAN.floorHeight;$('#h3h').value=Math.max(150,Math.min(400,PLAN.floorHeight));savePlan();if(H3.run)buildHouse3D();};
+window.setRoomHeight=(id,v)=>{const r=PLAN.rooms.find(x=>x.id===id);if(!r)return;
+  let n=parseInt(v);if(v===''||isNaN(n)){delete r.height;}else{r.height=Math.max(40,n);}
+  savePlan();render();if(H3.run)buildHouse3D();};
 
 function renderRoomPanel(){
   const box=$('#roomPanel');const r=PLAN.rooms.find(x=>x.id===SEL);
@@ -543,6 +551,7 @@ function renderRoomPanel(){
       <button class="sec" onclick="delRoom('${r.id}')">🗑️ Stanza</button></div>
     <div class="row" style="margin-top:8px"><span class="mut">Tipo:</span>
       <select onchange="setRoomKind('${r.id}',this.value)">${opts}</select></div>
+    <div class="row" style="margin-top:6px"><span class="mut">Altezza 3D</span><input type="number" min="40" placeholder="piano (${PLAN.floorHeight||250})" value="${r.height!=null?r.height:''}" onchange="setRoomHeight('${r.id}',this.value)" style="width:100px"><span class="mut">vuoto = piano · più bassa = soppalco sopra</span></div>
     <div class="mut" style="margin-top:6px">Porte: ${(r.doors||[]).map(d=>d.type).join(', ')||'nessuna'}</div>
     <div style="margin-top:6px">${wins||'<span class="mut">Nessun'+(isExt(r)?' punto di osservazione':'a finestra')+' in questa stanza.</span>'}</div></div>`;
   for(const w of (r.windows||[])) if(w.photo) drawView(w);
@@ -648,7 +657,7 @@ async function openHouse3D(){$('#house3dModal').classList.add('on');const box=$(
   try{await ensureThree()}catch(e){box.innerHTML='<span class="bad" style="padding:20px;display:block">Impossibile caricare il motore 3D (vendor mancante).</span>';return}
   buildHouse3D();}
 function closeHouse3D(){H3.run=false;if(H3.animId)cancelAnimationFrame(H3.animId);if(H3.onResize)removeEventListener('resize',H3.onResize);if(H3.renderer){try{H3.renderer.dispose();H3.renderer.forceContextLoss&&H3.renderer.forceContextLoss()}catch(e){}}H3={};$('#house3dBox').innerHTML='';$('#house3dModal').classList.remove('on');}
-window.setH3Height=(v)=>{HHEIGHT=+v;if(H3.run)buildHouse3D();};
+window.setH3Height=(v)=>{PLAN.floorHeight=Math.max(80,Math.min(600,+v));$('#floorH').value=PLAN.floorHeight;savePlan();if(H3.run)buildHouse3D();};
 function buildHouse3D(){
   H3.run=false;if(H3.animId)cancelAnimationFrame(H3.animId);
   const box=$('#house3dBox');box.innerHTML='';
@@ -659,11 +668,12 @@ function buildHouse3D(){
   const dl=new THREE.DirectionalLight(0xffffff,0.7);dl.position.set(250,450,180);scene.add(dl);
   grp.add(new THREE.GridHelper(1200,24,0x223047,0x1a2130));
   const wallMat=new THREE.MeshStandardMaterial({color:0x9aa4b0,roughness:.95,metalness:0,side:THREE.DoubleSide});
-  const H=HHEIGHT;
+  const H=PLAN.floorHeight||250;
   function wallBox(p0,p1,y0,y1){const ax=p0[0]-CX3,az=p0[1]-CZ3,bx=p1[0]-CX3,bz=p1[1]-CZ3;const len=Math.hypot(bx-ax,bz-az);if(len<0.6||y1-y0<0.6)return;
     const m=new THREE.Mesh(new THREE.BoxGeometry(len,y1-y0,WT3),wallMat);m.position.set((ax+bx)/2,(y0+y1)/2,(az+bz)/2);m.rotation.y=-Math.atan2(bz-az,bx-ax);grp.add(m);}
-  let nRooms=0,nWin=0,nDoor=0,nFurn=0;
+  let nRooms=0,nWin=0,nDoor=0,nFurn=0,nLoft=0;
   for(const r of (PLAN.rooms||[])){nRooms++;const pts=roomPts(r);const ext=isExt(r);
+    const rh=Math.max(60, r.height!=null?r.height:H); // altezza muri della stanza (soppalco se < piano)
     // pavimento
     const shape=new THREE.Shape(pts.map(p=>new THREE.Vector2(p[0]-CX3,-(p[1]-CZ3))));
     const fgeo=new THREE.ShapeGeometry(shape);fgeo.rotateX(-Math.PI/2);
@@ -674,16 +684,21 @@ function buildHouse3D(){
     const cen=roomCenter(r);
     for(const d of (r.doors||[])){let bi=0,bd=1e9,bp=0,bl=0;es.forEach((e,i)=>{const pr=projOnSeg([d.x,d.y],e[0],e[1]);if(pr.dist<bd){bd=pr.dist;bi=i;bp=pr.d;bl=pr.len}});byEdge[bi].push({d:bp,len:bl,type:'door'});nDoor++;}
     for(const w of (r.windows||[])){const wx=w.x!=null?w.x:cen.x,wy=w.y!=null?w.y:cen.y;let bi=0,bd=1e9,bp=0,bl=0;es.forEach((e,i)=>{const pr=projOnSeg([wx,wy],e[0],e[1]);if(pr.dist<bd){bd=pr.dist;bi=i;bp=pr.d;bl=pr.len}});byEdge[bi].push({d:bp,len:bl,type:'window'});nWin++;}
-    // muri con vani
+    // muri con vani (a altezza stanza)
     es.forEach((e,i)=>{const a=e[0],b=e[1];const L=Math.hypot(b[0]-a[0],b[1]-a[1]);if(L<1)return;const ux=(b[0]-a[0])/L,uy=(b[1]-a[1])/L;const pAt=dd=>[a[0]+ux*dd,a[1]+uy*dd];
       const ops=byEdge[i].slice().sort((x,y)=>x.d-y.d);let cur=0;
       for(const op of ops){const half=(op.type==='window'?WW3:DW3)/2;const s=op.d-half,e2=op.d+half;
-        if(s>cur)wallBox(pAt(cur),pAt(Math.max(cur,s)),0,H);
+        if(s>cur)wallBox(pAt(cur),pAt(Math.max(cur,s)),0,rh);
         const q0=pAt(Math.max(0,s)),q1=pAt(Math.min(L,e2));
-        if(op.type==='window'){wallBox(q0,q1,0,SILL3);wallBox(q0,q1,Math.min(WHEAD3,H),H);}
+        if(op.type==='window'){wallBox(q0,q1,0,Math.min(SILL3,rh));if(WHEAD3<rh)wallBox(q0,q1,WHEAD3,rh);}
         cur=Math.max(cur,e2);}
-      if(cur<L)wallBox(pAt(cur),pAt(L),0,H);
+      if(cur<L)wallBox(pAt(cur),pAt(L),0,rh);
     });
+    // soppalco: soletta semitrasparente all'altezza (ridotta) della stanza
+    if(r.height!=null && r.height<H-1){nLoft++;
+      const lgeo=new THREE.ShapeGeometry(new THREE.Shape(pts.map(p=>new THREE.Vector2(p[0]-CX3,-(p[1]-CZ3)))));lgeo.rotateX(-Math.PI/2);
+      const slab=new THREE.Mesh(lgeo,new THREE.MeshStandardMaterial({color:0xd29922,transparent:true,opacity:0.5,roughness:1,side:THREE.DoubleSide}));
+      slab.position.y=rh;grp.add(slab);}
   }
   // mobili con modello .glb (gli altri sono nascosti per scelta)
   const loader=new THREE.GLTFLoader();
@@ -701,7 +716,7 @@ function buildHouse3D(){
   const ctrl=new THREE.OrbitControls(cam,rnd.domElement);ctrl.target.set(0,40,0);ctrl.enableDamping=true;ctrl.update();
   const onResize=()=>{const w2=box.clientWidth,h2=box.clientHeight;if(!w2||!h2)return;cam.aspect=w2/h2;cam.updateProjectionMatrix();rnd.setSize(w2,h2)};
   addEventListener('resize',onResize);
-  $('#house3dInfo').textContent=`${nRooms} stanze · ${nWin} finestre · ${nDoor} porte · ${nFurn} mobili 3D`+((nFurn===0)?' (nessun mobile ha un modello .glb)':'');
+  $('#house3dInfo').textContent=`${nRooms} stanze · ${nWin} finestre · ${nDoor} porte · ${nFurn} mobili 3D`+(nLoft?` · ${nLoft} con soppalco`:'')+((nFurn===0)?' — nessun mobile ha un modello .glb':'');
   H3={run:true,renderer:rnd,controls:ctrl,onResize,scene,grp};
   (function loop(){if(!H3.run)return;H3.animId=requestAnimationFrame(loop);ctrl.update();rnd.render(scene,cam)})();
 }
