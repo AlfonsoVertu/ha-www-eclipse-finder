@@ -183,10 +183,13 @@ svg text{user-select:none}
     <div class="row" style="justify-content:space-between;margin-top:10px"><button class="sec" onclick="winStep(1)">←</button><button onclick="winStep(3)">Avanti →</button></div>
   </div>
   <div class="step" data-s="3"><div class="mut" style="margin:8px 0" id="wDirLbl">Direzione (punta verso la finestra)</div>
+    <div class="mut" style="margin:-4px 0 8px">Tieni il telefono come per fotografare la vista: catturo direzione <b>e</b> inclinazione.</div>
     <div class="livehdg" id="wLive">—°</div><div class="mut" style="text-align:center" id="wLivec"></div>
-    <div class="row" style="margin-top:8px"><button class="sec" onclick="enableCompass()">🧭 Bussola</button><button onclick="lockHeading()">🔒 Blocca</button></div>
-    <div class="mut" style="text-align:center;margin:8px 0">— oppure gradi a mano —</div>
-    <div class="row"><input id="wDeg" type="number" min="0" max="360" placeholder="0–360 (N0 E90 S180 O270)" style="flex:1"><button class="sec" onclick="useManual()">Usa</button></div>
+    <div class="mut" style="text-align:center">inclinazione (centro foto): <b id="wLiveAlt">—°</b></div>
+    <div class="row" style="margin-top:8px"><button class="sec" onclick="enableCompass()">🧭 Bussola</button><button onclick="lockHeading()">🔒 Blocca mira</button></div>
+    <div class="mut" style="text-align:center;margin:8px 0">— oppure a mano —</div>
+    <div class="row"><input id="wDeg" type="number" min="0" max="360" placeholder="direzione 0–360 (N0 E90 S180 O270)" style="flex:1"></div>
+    <div class="row" style="margin-top:6px"><input id="wAlt" type="number" min="-80" max="80" placeholder="altezza centro (° opz, 0=orizzonte)" style="flex:1"><button class="sec" onclick="useManual()">Usa</button></div>
     <div id="wcerr" class="mut"></div>
     <div class="row" style="justify-content:space-between;margin-top:10px"><button class="sec" onclick="winStep(2)">←</button><button id="wS3" disabled onclick="winStep(4)">Avanti →</button></div>
   </div>
@@ -199,7 +202,7 @@ svg text{user-select:none}
 
 <script>
 const $=s=>document.querySelector(s);
-let ECL=null, PLAN={rooms:[]}, LIVE=null, LOCKED=null, WPHOTO=null;
+let ECL=null, PLAN={rooms:[]}, LIVE=null, LOCKED=null, WPHOTO=null, LIVEPITCH=null, LOCKEDALT=null;
 let MODE=null; // 'door:<type>' | 'window' placement
 let SEL=null;  // selected room id
 const DCOL={interna:'var(--d-int)',balcone:'var(--d-bal)',esterna:'var(--d-est)',principale:'var(--d-main)'};
@@ -380,7 +383,7 @@ window.delWin=(rid,wid)=>{const r=PLAN.rooms.find(x=>x.id===rid);if(r){r.windows
 
 // ---------- Wizard finestra ----------
 function startAddWindow(){
-  LOCKED=null;WPHOTO=null;$('#wS3').disabled=true;$('#wName').value='';$('#wDeg').value='';$('#wPname').textContent='';$('#wPrev').innerHTML='';$('#wLive').textContent='—°';$('#wLivec').textContent='';
+  LOCKED=null;LOCKEDALT=null;LIVEPITCH=null;WPHOTO=null;$('#wS3').disabled=true;$('#wName').value='';$('#wDeg').value='';$('#wAlt').value='';$('#wPname').textContent='';$('#wPrev').innerHTML='';$('#wLive').textContent='—°';$('#wLivec').textContent='';$('#wLiveAlt').textContent='—°';
   const sel=$('#wRoom');sel.innerHTML='';for(const r of PLAN.rooms){const o=document.createElement('option');o.value=r.id;o.textContent=r.name;sel.appendChild(o)}
   if(SEL)sel.value=SEL;$('#wRoomNew').value='';
   updateWinLabels();winStep(1);$('#winModal').classList.add('on');
@@ -397,13 +400,14 @@ function closeWin(){$('#winModal').classList.remove('on')}
 function winStep(n){document.querySelectorAll('#winModal .step').forEach(s=>s.classList.toggle('on',+s.dataset.s===n));
   if(n===3)$('#wLivec').textContent=LOCKED!=null?compass16(LOCKED)+' '+LOCKED+'°':'';}
 function orient(ev){let h=null;if(ev.webkitCompassHeading!=null)h=ev.webkitCompassHeading;else if(ev.absolute&&ev.alpha!=null)h=(360-ev.alpha)%360;
-  if(h!=null){LIVE=Math.round(h);$('#wLive').textContent=LIVE+'°';$('#wLivec').textContent=compass16(LIVE)}}
+  if(h!=null){LIVE=Math.round(h);$('#wLive').textContent=LIVE+'°';$('#wLivec').textContent=compass16(LIVE)}
+  if(ev.beta!=null){LIVEPITCH=Math.max(-80,Math.min(80,Math.round(ev.beta-90)));const el=$('#wLiveAlt');if(el)el.textContent=LIVEPITCH+'°'}}
 async function enableCompass(){$('#wcerr').textContent='';try{
   if(typeof DeviceOrientationEvent!=='undefined'&&DeviceOrientationEvent.requestPermission){const p=await DeviceOrientationEvent.requestPermission();if(p!=='granted'){$('#wcerr').innerHTML='<span class="bad">Permesso negato</span>';return}}
   addEventListener('deviceorientationabsolute',orient,true);addEventListener('deviceorientation',orient,true);$('#wLivec').textContent='muovi a "8"…';
 }catch(e){$('#wcerr').innerHTML='<span class="bad">Bussola solo su HTTPS</span>'}}
-function lockHeading(){if(LIVE==null){alert('Attiva la bussola');return}LOCKED=LIVE;$('#wLive').textContent=LOCKED+'° 🔒';$('#wS3').disabled=false}
-function useManual(){let v=parseFloat($('#wDeg').value);if(isNaN(v)){alert('Gradi 0-360');return}LOCKED=((v%360)+360)%360;$('#wLive').textContent=LOCKED+'° ✍️';$('#wLivec').textContent=compass16(LOCKED)+' (manuale)';$('#wS3').disabled=false}
+function lockHeading(){if(LIVE==null){alert('Attiva la bussola');return}LOCKED=LIVE;LOCKEDALT=(LIVEPITCH!=null?LIVEPITCH:0);$('#wLive').textContent=LOCKED+'° 🔒';$('#wLivec').textContent=compass16(LOCKED)+' · centro '+LOCKEDALT+'°';$('#wS3').disabled=false}
+function useManual(){let v=parseFloat($('#wDeg').value);if(isNaN(v)){alert('Inserisci la direzione 0-360');return}LOCKED=((v%360)+360)%360;let a=parseFloat($('#wAlt').value);LOCKEDALT=isNaN(a)?0:Math.max(-80,Math.min(80,a));$('#wLive').textContent=LOCKED+'° ✍️';$('#wLivec').textContent=compass16(LOCKED)+' (manuale) · centro '+LOCKEDALT+'°';$('#wS3').disabled=false}
 function wPhotoPick(inp){if(!inp.files[0])return;WPHOTO=inp.files[0];$('#wPname').textContent='✓';$('#wPrev').innerHTML='<div class="viewwrap"><img src="'+URL.createObjectURL(WPHOTO)+'"></div>'}
 async function saveWindow(){
   let roomId=$('#wRoom').value;const newName=$('#wRoomNew').value.trim();
@@ -414,7 +418,7 @@ async function saveWindow(){
   let photo=null;if(WPHOTO){const fd=new FormData();fd.append('file',WPHOTO);photo=(await (await fetch('api/photo',{method:'POST',body:fd})).json()).photo}
   room.windows=room.windows||[];
   room.windows.push({id:uid(),name:$('#wName').value.trim(),azimuth:LOCKED,photo_az:LOCKED,photo:photo,photo_fov:66,alt_min:0,
-    x:room.x+room.w/2,y:room.y+room.h/2});
+    photo_alt:(LOCKEDALT!=null?LOCKEDALT:0),x:room.x+room.w/2,y:room.y+room.h/2});
   SEL=roomId;closeWin();render();savePlan();
 }
 boot();
